@@ -1,0 +1,7 @@
+# VIctory-Navi10 v0.2
+
+- Milestone 0. Local branch `v0.2-meshlets` starts at alpha commit `a6e8c78`. Previous raw benchmarks and the separate GPL workspace are preserved. The alpha compiles. The earlier stable executable passed 12 exact image comparisons and 90 timed frames on the RX 5700 XT. Driver UMD `32.0.21045.29003`, Windows build `26300`.
+- Milestone 1 candidate. `--test-meshlets` adds a synthetic indexed triangle path alongside the city. The C# and all three shader stages compile. GPU validation is pending. The fixtures check exact RGBA, index triples, indirect arguments, vertex contents, capacity counters and canaries, including 128 concurrent threadgroups competing for one triangle.
+- Windows. CreateProcess returned Win32 4551 for newly built unsigned executables with Smart App Control enabled. Code Integrity event log and CiTool returned access denied. The exact enforcement rule is unconfirmed. The previous stable executable ran.
+- Upstream PR #961 is open at `31568ced3e44bb31aac5755e18c7d6f165204e30`. Its source diff shows separate vertex, index and primitive outputs and a generated vertex reader. Its reported tests and timings are upstream results. Navi10 uses its own synthetic input format and a bounded index stream. [PR #961](https://github.com/Marvisak/VIctory/pull/961/files).
+- Next. Run `--test-meshlets` and the alpha regression suite on the RX 5700 XT when Windows accepts the build. Milestone 2 follows successful GPU validation.
