@@ -8,18 +8,21 @@ internal sealed unsafe partial class Renderer
     private ulong referenceAddress;
     private ulong referenceMaterialsAddress;
     private IntPtr triangleMaterials;
+    private float[] triangleTransform;
     private uint referenceCount;
 
     internal TriangleResult RenderTriangles(MeshletInput[] meshlets, VertexInput[] input,
-        PrimitiveInput[] primitives, int vertexCapacity, int indexCapacity, VertexInput[] reference, uint[] materials)
+        PrimitiveInput[] primitives, int vertexCapacity, int indexCapacity, VertexInput[] reference, uint[] materials,
+        float[] transform)
     {
         if (!triangleTest || vertexCapacity < 0 || indexCapacity < 0 ||
             vertexCapacity >= MeshletCount * 24 * 12 / sizeof(VertexInput) ||
             indexCapacity >= MeshletCount * 36 || Math.Max(meshlets.Length, input.Length) > 65535 ||
-            reference.Length % 3 != 0 || reference.Length / 3 != materials.Length)
+            reference.Length % 3 != 0 || reference.Length / 3 != materials.Length || transform.Length != 16)
             throw new ArgumentException("Invalid triangle fixture size or capacity.");
 
         var constants = new FrameConstants();
+        triangleTransform = transform;
         var result = new TriangleResult { Pixels = new byte[width * height * 4] };
         int firstTemporary = owned.Count;
         try
@@ -68,6 +71,8 @@ internal sealed unsafe partial class Renderer
                 limits[3] = (uint)indexCapacity;
                 limits[4] = (uint)vertexCapacity;
                 D3D.Call<D3D.SetConstants>(list, D3D.List.ComputeConstants)(list, 0, 5, limits, 0);
+                fixed (float* matrix = transform)
+                    D3D.Call<D3D.SetConstants>(list, D3D.List.ComputeConstants)(list, 13, 16, matrix, 0);
                 var srv = D3D.Call<D3D.SetAddress>(list, D3D.List.ComputeSrv);
                 srv(list, 9, meshletAddress);
                 srv(list, 10, inputAddress);

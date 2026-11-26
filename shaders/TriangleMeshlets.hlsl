@@ -22,6 +22,30 @@ cbuffer Limits : register(b0)
     uint VertexCapacity;
 };
 
+cbuffer Camera : register(b1)
+{
+    row_major float4x4 WorldViewProjection;
+};
+
+float4 Project(float3 position)
+{
+    return mul(WorldViewProjection, float4(position, 1));
+}
+
+bool OutsideClip(float4 a, float4 b, float4 c)
+{
+    // A triangle can be rejected only if every corner violates the same plane.
+    // Keep a small conservative margin around planes.
+    const float epsilon = 0.00001;
+    float3 margin = epsilon * max(1.0, float3(abs(a.w), abs(b.w), abs(c.w)));
+    return all(float3(a.x + a.w, b.x + b.w, c.x + c.w) < -margin) ||
+           all(float3(a.w - a.x, b.w - b.x, c.w - c.x) < -margin) ||
+           all(float3(a.y + a.w, b.y + b.w, c.y + c.w) < -margin) ||
+           all(float3(a.w - a.y, b.w - b.y, c.w - c.y) < -margin) ||
+           all(float3(a.z, b.z, c.z) < -margin) ||
+           all(float3(a.w - a.z, b.w - b.z, c.w - c.z) < -margin);
+}
+
 StructuredBuffer<MeshletInput> Meshlets : register(t3);
 StructuredBuffer<VertexInput> InputVertices : register(t4);
 StructuredBuffer<PrimitiveInput> Primitives : register(t5);
@@ -70,12 +94,10 @@ void Expand(uint id : SV_DispatchThreadID)
             continue;
         }
         uint3 indices = local + mesh.vertexOffset;
-        float3 a = InputVertices[indices.x].position;
-        float3 b = InputVertices[indices.y].position;
-        float3 c = InputVertices[indices.z].position;
-        // Clip-space positions have w=1. Reject only when all corners are outside one plane.
-        if (any(min(a, min(b, c)) > 1) ||
-            any(max(a, max(b, c)) < float3(-1, -1, 0)))
+        float4 a = Project(InputVertices[indices.x].position);
+        float4 b = Project(InputVertices[indices.y].position);
+        float4 c = Project(InputVertices[indices.z].position);
+        if (OutsideClip(a, b, c))
             continue;
         // HLSL 5.1 logical operators may evaluate both operands.
         // Reject vertex overflow before the reservation can change the draw count.
@@ -108,7 +130,7 @@ Varyings VS(uint id : SV_VertexID)
 {
     VertexInput vertex = RasterVertices[id];
     Varyings output;
-    output.position = float4(vertex.position, 1);
+    output.position = Project(vertex.position);
     output.color = vertex.color;
     output.normal = vertex.normal;
     return output;

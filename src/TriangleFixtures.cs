@@ -59,6 +59,11 @@ internal sealed class TriangleResult
 
 internal static class TriangleFixtures
 {
+    private static readonly float[] Identity =
+    {
+        1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1
+    };
+
     internal sealed class Report
     {
         public bool Passed { get; set; }
@@ -125,7 +130,61 @@ internal static class TriangleFixtures
         for (int repeat = 0; repeat < 16; repeat++)
             Verify(report, renderer, "concurrent-index-overflow-" + repeat, contenders,
                 input, primitives, 10, 5, 0, 127, 2, 0, 1, 1);
+        VerifyPerspective(report, renderer);
         return report;
+    }
+
+    private static void VerifyPerspective(Report report, Renderer renderer)
+    {
+        // World +0.25 X, camera +0.25 X (net zero) and camera -0.5 Z.
+        // Left-handed 90-degree perspective, with near 1 and far 8.
+        const float depthScale = 8f / 7f;
+        var matrix = new[]
+        {
+            (float)renderer.Height / renderer.Width, 0, 0, 0,
+            0, 1f, 0, 0,
+            0, 0, depthScale, -0.5f * depthScale,
+            0, 0, 1f, 0.5f
+        };
+        PerspectiveCase(report, renderer, matrix, "perspective-inside", 2, 2, 3, 0, true, true);
+        PerspectiveCase(report, renderer, matrix, "perspective-near-crossing", 2, 2, 0.25f, 0, true, true);
+        PerspectiveCase(report, renderer, matrix, "perspective-far-crossing", 2, 2, 9, 0, true, true);
+        PerspectiveCase(report, renderer, matrix, "perspective-side-crossing", 2, 2, 3, 10, true, true);
+        PerspectiveCase(report, renderer, matrix, "perspective-crossing-eye", 2, 2, -1, 0, true, true);
+        PerspectiveCase(report, renderer, matrix, "perspective-behind-eye", -2, -2, -2, 0, false, false);
+        PerspectiveCase(report, renderer, matrix, "perspective-before-near", 0, 0, 0.25f, 0, false, false);
+        PerspectiveCase(report, renderer, matrix, "perspective-after-far", 9, 9, 10, 0, false, false);
+    }
+
+    private static void PerspectiveCase(Report report, Renderer renderer, float[] matrix, string name,
+        float z0, float z1, float z2, float x2, bool retained, bool visible)
+    {
+        var vertices = new[]
+        {
+            new VertexInput(-1, -0.6f, 1, 0, 0), new VertexInput(1, -0.6f, 0, 1, 0),
+            new VertexInput(x2, 1, 0, 0, 1)
+        };
+        vertices[0].Z = z0; vertices[1].Z = z1; vertices[2].Z = z2;
+        var gpu = RunCase(renderer, name, new[] { new MeshletInput(0, 3, 0, 1) }, vertices,
+            new[] { new PrimitiveInput(0, 1, 2, 7) }, 3, 3, vertices, new[] { 7u }, matrix);
+        bool images = gpu.Pixels.SequenceEqual(gpu.Reference);
+        bool coverage = HasCoverage(gpu.Reference);
+        bool geometry = retained
+            ? gpu.Indices.SequenceEqual(new[] { 0u, 1u, 2u }) && gpu.Materials.SequenceEqual(new[] { 7u })
+            : gpu.Indices.Length == 0 && gpu.Materials.Length == 0;
+        bool passed = images && coverage == visible && geometry && OutputValid(gpu) && gpu.Invalid == 0 && gpu.Dropped == 0;
+        report.Cases.Add(new { Name = name, Passed = passed, ImagesMatch = images, HasCoverage = coverage,
+            ExpectedCoverage = visible, ExpectedRetained = retained, Gpu = gpu });
+        report.Passed &= passed;
+    }
+
+    private static bool HasCoverage(byte[] pixels)
+    {
+        // The first pixel is outside every perspective fixture.
+        for (int i = 4; i < pixels.Length; i += 4)
+            if (pixels[i] != pixels[0] || pixels[i + 1] != pixels[1] || pixels[i + 2] != pixels[2])
+                return true;
+        return false;
     }
 
     private static byte[] Verify(Report report, Renderer renderer, string name, MeshletInput[] meshlets,
@@ -135,22 +194,33 @@ internal static class TriangleFixtures
         var expectedIndices = expected.Where((word, i) => i % 4 != 3).ToArray();
         var expectedMaterials = expected.Where((word, i) => i % 4 == 3).ToArray();
         var direct = expectedIndices.Select(i => input[i]).ToArray();
-        TriangleResult result;
-        try { result = renderer.RenderTriangles(meshlets, input, primitives, vertexCapacity, indexCapacity, direct, expectedMaterials); }
-        catch (Exception error) { throw new InvalidOperationException("Triangle fixture failed: " + name, error); }
+        var result = RunCase(renderer, name, meshlets, input, primitives, vertexCapacity, indexCapacity,
+            direct, expectedMaterials, Identity);
         bool indices = result.Indices.Length % 3 == 0 &&
             SortTriangles(result.Indices, null).SequenceEqual(SortTriangles(expectedIndices, null));
         bool materials = indices && SortTriangles(result.Indices, result.Materials)
             .SequenceEqual(SortTriangles(expectedIndices, expectedMaterials));
         bool images = result.Pixels.SequenceEqual(result.Reference);
-        bool passed = materials && images && result.ArgumentsValid && result.VerticesValid &&
-            result.IndexGuardIntact && result.MaterialGuardIntact &&
+        bool passed = materials && images && OutputValid(result) &&
             result.Invalid == invalid && result.Dropped == dropped;
         report.Cases.Add(new { Name = name, Passed = passed, VertexCapacity = vertexCapacity, IndexCapacity = indexCapacity,
             ExpectedInvalid = invalid, ExpectedDropped = dropped, IndicesMatch = indices,
             MaterialsMatch = materials, ImagesMatch = images, Gpu = result });
         report.Passed &= passed;
         return result.Pixels;
+    }
+
+    private static bool OutputValid(TriangleResult result)
+    {
+        return result.ArgumentsValid && result.VerticesValid && result.IndexGuardIntact && result.MaterialGuardIntact;
+    }
+
+    private static TriangleResult RunCase(Renderer renderer, string name, MeshletInput[] meshlets, VertexInput[] input,
+        PrimitiveInput[] primitives, int vertexCapacity, int indexCapacity, VertexInput[] reference,
+        uint[] materials, float[] matrix)
+    {
+        try { return renderer.RenderTriangles(meshlets, input, primitives, vertexCapacity, indexCapacity, reference, materials, matrix); }
+        catch (Exception error) { throw new InvalidOperationException("Triangle fixture failed: " + name, error); }
     }
 
     private static IEnumerable<Tuple<uint, uint, uint, uint>> SortTriangles(uint[] indices, uint[] materials)

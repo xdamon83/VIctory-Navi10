@@ -6,4 +6,5 @@
 - Windows. CreateProcess returned Win32 4551 with Smart App Control enabled. After the user changed the setting, local execution succeeded. The exact enforcement rule remains unconfirmed.
 - Upstream PR #961 is open at `31568ced3e44bb31aac5755e18c7d6f165204e30`. Its source diff shows separate vertex, index and primitive outputs and a generated vertex reader. Its reported tests and timings are upstream results. Navi10 uses its own synthetic input format and a bounded index stream. [PR #961](https://github.com/Marvisak/VIctory/pull/961/files).
 - Milestone 2 validated. Vertices carry interpolated color and normals. The material stream stores one flat 32-bit ID per emitted triangle, addressed by `SV_PrimitiveID`. All 26 fixtures and both shading controls passed on RX 5700 XT and WARP. The final build passed 12 city comparisons and 90 timed regression frames. Raw fixture results are in `runs/attributes-radeon/`.
-- Next. Milestone 3 adds perspective projection and conservative clipping in homogeneous coordinates.
+- Milestone 3 validated. The world-view-projection transform feeds six homogeneous clip planes. All 34 fixtures passed on the RX 5700 XT and WARP, including triangles crossing the eye, near, far and lateral planes.
+- Next. Verify independent output capacities and document synchronization.
