@@ -57,7 +57,7 @@ internal static unsafe class D3D
         internal const int Close = 9, Reset = 10, Draw = 12, Dispatch = 14, CopyBuffer = 15,
             CopyTexture = 16, PrimitiveTopology = 20, SetViewports = 21, SetScissors = 22,
             Pipeline = 25, Barriers = 26, ComputeRoot = 29, GraphicsRoot = 30,
-            ComputeConstants = 35, GraphicsConstants = 36, GraphicsSrv = 40, ComputeUav = 41,
+            ComputeConstants = 35, GraphicsConstants = 36, ComputeSrv = 39, GraphicsSrv = 40, ComputeUav = 41,
             SetIndex = 43, RenderTargets = 46, ClearDepth = 47, ClearColor = 48, EndQuery = 53,
             ResolveQuery = 54, ExecuteIndirect = 59;
     }

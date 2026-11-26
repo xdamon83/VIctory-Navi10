@@ -25,7 +25,7 @@ internal sealed class FrameStats
     public long ProcessWorkingSetBytes { get; set; }
 }
 
-internal sealed unsafe class Renderer : IDisposable
+internal sealed unsafe partial class Renderer : IDisposable
 {
     private readonly List<IntPtr> owned = new List<IntPtr>();
     private IntPtr device, adapter3, queue, allocator, list, fence, completed;
@@ -44,13 +44,15 @@ internal sealed unsafe class Renderer : IDisposable
     internal int MeshletCount { get { return meshletCount; } }
     internal readonly HardwareReport Hardware;
 
-    internal Renderer(int width, int height, int objects, bool warp, string shaderFile, bool probeOnly = false)
+    internal Renderer(int width, int height, int objects, bool warp, string shaderFile, bool probeOnly = false,
+        bool triangleTest = false)
     {
         this.width = width;
         this.height = height;
         meshletCount = objects;
         grid = (int)Math.Ceiling(Math.Sqrt((objects + 7) / 8));
         rowPitch = (width * 4 + 255) & ~255;
+        this.triangleTest = triangleTest;
         try
         {
             IntPtr adapter = OpenAdapter(warp);
@@ -158,7 +160,7 @@ internal sealed unsafe class Renderer : IDisposable
 
     private void InitializePipelines(string source)
     {
-        D3D.RootParameter* parameters = stackalloc D3D.RootParameter[9];
+        D3D.RootParameter* parameters = stackalloc D3D.RootParameter[12];
         parameters[0] = new D3D.RootParameter { Type = 1, Constants = 16 };
         parameters[1] = new D3D.RootParameter { Type = 3, Visibility = 1 }; // vertex SRV
         parameters[2] = new D3D.RootParameter { Type = 4 };
@@ -168,7 +170,10 @@ internal sealed unsafe class Renderer : IDisposable
         parameters[6] = new D3D.RootParameter { Type = 4, Register = 3 };
         parameters[7] = new D3D.RootParameter { Type = 3, Register = 2, Visibility = 1 };
         parameters[8] = new D3D.RootParameter { Type = 4, Register = 4 };
-        var description = new D3D.RootDescription { Count = 9, Parameters = parameters };
+        parameters[9] = new D3D.RootParameter { Type = 3, Register = 3 };
+        parameters[10] = new D3D.RootParameter { Type = 3, Register = 4 };
+        parameters[11] = new D3D.RootParameter { Type = 3, Register = 5 };
+        var description = new D3D.RootDescription { Count = triangleTest ? 12 : 9, Parameters = parameters };
         IntPtr serialized, error;
         D3D.CheckCompiler(D3D.D3D12SerializeRootSignature(&description, 1, out serialized, out error),
             error, "D3D12SerializeRootSignature");
@@ -194,8 +199,11 @@ internal sealed unsafe class Renderer : IDisposable
         }
         for (int index = 0; index < 8; index++) raster.StencilOps[index] = (index & 3) == 3 ? 8 : 1;
         rasterPipeline = Create(D3D.Device.CreateGraphicsPipeline, &raster, D3D.PipelineId, "CreateGraphicsPipelineState");
-        var cull = new D3D.ComputePipeline { Root = root, CS = Compile(source, "Cull", "cs_5_1") };
-        cullPipeline = Create(D3D.Device.CreateComputePipeline, &cull, D3D.PipelineId, "CreateComputePipelineState");
+        if (!triangleTest)
+        {
+            var cull = new D3D.ComputePipeline { Root = root, CS = Compile(source, "Cull", "cs_5_1") };
+            cullPipeline = Create(D3D.Device.CreateComputePipeline, &cull, D3D.PipelineId, "CreateComputePipelineState");
+        }
         var expand = new D3D.ComputePipeline { Root = root, CS = Compile(source, "Expand", "cs_5_1") };
         expandPipeline = Create(D3D.Device.CreateComputePipeline, &expand, D3D.PipelineId, "Create expansion pipeline");
         signature = MakeSignature(0, 16);
@@ -271,7 +279,7 @@ internal sealed unsafe class Renderer : IDisposable
         rtv = CreateView(2, color);
         dsv = CreateView(3, depth);
         visible = Buffer(MeshletCount * 4, D3D.DefaultHeap, D3D.NonPixelShaderResource, "Create meshlet index buffer", true);
-        arguments = Buffer(24, D3D.DefaultHeap, D3D.CopyDest, "Create indirect arguments", true);
+        arguments = Buffer(triangleTest ? 28 : 24, D3D.DefaultHeap, D3D.CopyDest, "Create indirect arguments", true);
         resetArguments = Buffer(48, D3D.UploadHeap, D3D.GenericRead, "Create initial arguments");
         statsReadback = Buffer(32, D3D.ReadbackHeap, D3D.CopyDest, "Create statistics readback");
         pixelReadback = Buffer(rowPitch * height, D3D.ReadbackHeap, D3D.CopyDest, "Create pixel readback");
@@ -405,7 +413,8 @@ internal sealed unsafe class Renderer : IDisposable
         D3D.Call<D3D.SetObject>(list, D3D.List.GraphicsRoot)(list, root);
         D3D.Call<D3D.SetConstants>(list, D3D.List.GraphicsConstants)(list, 0, 16, constants, 0);
         D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 1, visibleAddress);
-        D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 4, vertexAddress);
+        D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 4,
+            triangleTest && path == RenderPath.Direct ? referenceAddress : vertexAddress);
         D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 7, attributesAddress);
         var viewport = new D3D.Viewport { Width = width, Height = height, MaxDepth = 1 };
         var scissor = new D3D.Rect { Right = width, Bottom = height };
@@ -430,7 +439,8 @@ internal sealed unsafe class Renderer : IDisposable
                 1, arguments, 0, IntPtr.Zero, 0);
         }
         else
-            D3D.Call<D3D.DrawInstanced>(list, D3D.List.Draw)(list, 36, (uint)MeshletCount, 0, 0);
+            D3D.Call<D3D.DrawInstanced>(list, D3D.List.Draw)(list,
+                triangleTest ? referenceCount : 36u, triangleTest ? 1u : (uint)MeshletCount, 0, 0);
     }
 
     private void RecordCapture()

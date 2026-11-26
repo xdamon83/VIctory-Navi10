@@ -1,0 +1,113 @@
+struct MeshletInput
+{
+    uint vertexOffset, vertexCount, primitiveOffset, primitiveCount;
+};
+
+struct VertexInput
+{
+    float3 position;
+    float4 color;
+};
+
+struct PrimitiveInput
+{
+    uint3 corners;
+    uint material;
+};
+
+cbuffer Limits : register(b0)
+{
+    uint MeshletCount, VertexCount, PrimitiveCount, IndexCapacity;
+    uint VertexCapacity;
+};
+
+StructuredBuffer<MeshletInput> Meshlets : register(t3);
+StructuredBuffer<VertexInput> InputVertices : register(t4);
+StructuredBuffer<PrimitiveInput> Primitives : register(t5);
+StructuredBuffer<VertexInput> RasterVertices : register(t1);
+RWStructuredBuffer<VertexInput> OutputVertices : register(u2);
+RWStructuredBuffer<uint> OutputIndices : register(u3);
+RWByteAddressBuffer Arguments : register(u1);
+
+bool ReserveTriangle(out uint start)
+{
+    Arguments.InterlockedAdd(0, 0, start);
+    [allow_uav_condition]
+    while (start <= IndexCapacity && IndexCapacity - start >= 3)
+    {
+        uint observed;
+        Arguments.InterlockedCompareExchange(0, start, start + 3, observed);
+        if (observed == start) return true;
+        start = observed;
+    }
+    return false;
+}
+
+[numthreads(1, 1, 1)]
+void Expand(uint id : SV_DispatchThreadID)
+{
+    if (VertexCount <= VertexCapacity && id < VertexCount)
+        OutputVertices[id] = InputVertices[id];
+
+    if (id >= MeshletCount) return;
+    MeshletInput mesh = Meshlets[id];
+    if (mesh.vertexOffset > VertexCount || mesh.vertexCount > VertexCount - mesh.vertexOffset ||
+        mesh.primitiveOffset > PrimitiveCount || mesh.primitiveCount > PrimitiveCount - mesh.primitiveOffset)
+    {
+        Arguments.InterlockedAdd(20, 1);
+        return;
+    }
+    for (uint i = 0; i < mesh.primitiveCount; ++i)
+    {
+        uint3 local = Primitives[mesh.primitiveOffset + i].corners;
+        if (any(local >= mesh.vertexCount))
+        {
+            Arguments.InterlockedAdd(20, 1);
+            continue;
+        }
+        uint3 indices = local + mesh.vertexOffset;
+        float3 a = InputVertices[indices.x].position;
+        float3 b = InputVertices[indices.y].position;
+        float3 c = InputVertices[indices.z].position;
+        // Clip-space positions have w=1. Reject only when all corners are outside one plane.
+        if (any(min(a, min(b, c)) > 1) ||
+            any(max(a, max(b, c)) < float3(-1, -1, 0)))
+            continue;
+        // HLSL 5.1 logical operators may evaluate both operands.
+        // Reject vertex overflow before the reservation can change the draw count.
+        if (VertexCount > VertexCapacity)
+        {
+            Arguments.InterlockedAdd(24, 1);
+            continue;
+        }
+        uint start;
+        if (!ReserveTriangle(start))
+        {
+            Arguments.InterlockedAdd(24, 1);
+            continue;
+        }
+        OutputIndices[start] = indices.x;
+        OutputIndices[start + 1] = indices.y;
+        OutputIndices[start + 2] = indices.z;
+    }
+}
+
+struct Varyings
+{
+    float4 position : SV_Position;
+    float4 color : COLOR0;
+};
+
+Varyings VS(uint id : SV_VertexID)
+{
+    VertexInput vertex = RasterVertices[id];
+    Varyings output;
+    output.position = float4(vertex.position, 1);
+    output.color = vertex.color;
+    return output;
+}
+
+float4 PS(Varyings input) : SV_Target
+{
+    return input.color;
+}
