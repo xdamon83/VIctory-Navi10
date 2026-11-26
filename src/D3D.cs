@@ -7,7 +7,7 @@ internal static unsafe class D3D
 {
     internal const int Rgba8 = 28, D32 = 40;
     internal const int RenderTarget = 4, DepthWrite = 16, UnorderedAccess = 8;
-    internal const int IndexBuffer = 2, NonPixelShaderResource = 64, IndirectArgument = 512;
+    internal const int IndexBuffer = 2, NonPixelShaderResource = 64, PixelShaderResource = 128, IndirectArgument = 512;
     internal const int CopyDest = 1024, CopySource = 2048, GenericRead = 2755;
     internal const int DefaultHeap = 1, UploadHeap = 2, ReadbackHeap = 3;
     internal const int QueryTimestamp = 2;

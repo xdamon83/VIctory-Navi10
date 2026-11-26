@@ -160,7 +160,7 @@ internal sealed unsafe partial class Renderer : IDisposable
 
     private void InitializePipelines(string source)
     {
-        D3D.RootParameter* parameters = stackalloc D3D.RootParameter[12];
+        D3D.RootParameter* parameters = stackalloc D3D.RootParameter[13];
         parameters[0] = new D3D.RootParameter { Type = 1, Constants = 16 };
         parameters[1] = new D3D.RootParameter { Type = 3, Visibility = 1 }; // vertex SRV
         parameters[2] = new D3D.RootParameter { Type = 4 };
@@ -173,7 +173,8 @@ internal sealed unsafe partial class Renderer : IDisposable
         parameters[9] = new D3D.RootParameter { Type = 3, Register = 3 };
         parameters[10] = new D3D.RootParameter { Type = 3, Register = 4 };
         parameters[11] = new D3D.RootParameter { Type = 3, Register = 5 };
-        var description = new D3D.RootDescription { Count = triangleTest ? 12 : 9, Parameters = parameters };
+        parameters[12] = new D3D.RootParameter { Type = 3, Register = 6, Visibility = 5 }; // pixel SRV
+        var description = new D3D.RootDescription { Count = triangleTest ? 13 : 9, Parameters = parameters };
         IntPtr serialized, error;
         D3D.CheckCompiler(D3D.D3D12SerializeRootSignature(&description, 1, out serialized, out error),
             error, "D3D12SerializeRootSignature");
@@ -285,6 +286,9 @@ internal sealed unsafe partial class Renderer : IDisposable
         pixelReadback = Buffer(rowPitch * height, D3D.ReadbackHeap, D3D.CopyDest, "Create pixel readback");
         vertices = Buffer(MeshletCount * 24 * 12, D3D.DefaultHeap, D3D.NonPixelShaderResource, "Create expanded positions", true);
         quadAttributes = Buffer(MeshletCount * 6 * 16, D3D.DefaultHeap, D3D.NonPixelShaderResource, "Create quad attributes", true);
+        if (triangleTest)
+            triangleMaterials = Buffer((MeshletCount * 12 + 1) * sizeof(uint), D3D.DefaultHeap,
+                D3D.PixelShaderResource, "Create triangle materials", true);
         indices = Buffer(MeshletCount * 36 * 4, D3D.DefaultHeap, D3D.IndexBuffer, "Create expanded indices", true);
         vertexAddress = D3D.Call<D3D.GetU64>(vertices, 11)(vertices);
         attributesAddress = D3D.Call<D3D.GetU64>(quadAttributes, 11)(quadAttributes);
@@ -416,6 +420,9 @@ internal sealed unsafe partial class Renderer : IDisposable
         D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 4,
             triangleTest && path == RenderPath.Direct ? referenceAddress : vertexAddress);
         D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 7, attributesAddress);
+        if (triangleTest)
+            D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 12,
+                path == RenderPath.Direct ? referenceMaterialsAddress : Address(triangleMaterials));
         var viewport = new D3D.Viewport { Width = width, Height = height, MaxDepth = 1 };
         var scissor = new D3D.Rect { Right = width, Bottom = height };
         D3D.Call<D3D.SetViewports>(list, D3D.List.SetViewports)(list, 1, &viewport);

@@ -7,6 +7,7 @@ struct VertexInput
 {
     float3 position;
     float4 color;
+    float3 normal;
 };
 
 struct PrimitiveInput
@@ -25,8 +26,10 @@ StructuredBuffer<MeshletInput> Meshlets : register(t3);
 StructuredBuffer<VertexInput> InputVertices : register(t4);
 StructuredBuffer<PrimitiveInput> Primitives : register(t5);
 StructuredBuffer<VertexInput> RasterVertices : register(t1);
+StructuredBuffer<uint> RasterMaterials : register(t6);
 RWStructuredBuffer<VertexInput> OutputVertices : register(u2);
 RWStructuredBuffer<uint> OutputIndices : register(u3);
+RWStructuredBuffer<uint> OutputMaterials : register(u4);
 RWByteAddressBuffer Arguments : register(u1);
 
 bool ReserveTriangle(out uint start)
@@ -59,7 +62,8 @@ void Expand(uint id : SV_DispatchThreadID)
     }
     for (uint i = 0; i < mesh.primitiveCount; ++i)
     {
-        uint3 local = Primitives[mesh.primitiveOffset + i].corners;
+        PrimitiveInput primitive = Primitives[mesh.primitiveOffset + i];
+        uint3 local = primitive.corners;
         if (any(local >= mesh.vertexCount))
         {
             Arguments.InterlockedAdd(20, 1);
@@ -89,6 +93,7 @@ void Expand(uint id : SV_DispatchThreadID)
         OutputIndices[start] = indices.x;
         OutputIndices[start + 1] = indices.y;
         OutputIndices[start + 2] = indices.z;
+        OutputMaterials[start / 3] = primitive.material;
     }
 }
 
@@ -96,6 +101,7 @@ struct Varyings
 {
     float4 position : SV_Position;
     float4 color : COLOR0;
+    float3 normal : NORMAL0;
 };
 
 Varyings VS(uint id : SV_VertexID)
@@ -104,10 +110,14 @@ Varyings VS(uint id : SV_VertexID)
     Varyings output;
     output.position = float4(vertex.position, 1);
     output.color = vertex.color;
+    output.normal = vertex.normal;
     return output;
 }
 
-float4 PS(Varyings input) : SV_Target
+float4 PS(Varyings input, uint primitiveId : SV_PrimitiveID) : SV_Target
 {
-    return input.color;
+    uint material = RasterMaterials[primitiveId];
+    float3 tint = float3((material & 1u) != 0, (material & 2u) != 0, (material & 4u) != 0);
+    float brightness = 0.35 + 0.65 * saturate(normalize(input.normal).z);
+    return float4(input.color.rgb * lerp(0.5, 1.0, tint) * brightness, input.color.a);
 }
