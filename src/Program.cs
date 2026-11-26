@@ -14,6 +14,7 @@ internal sealed class Options
 {
     internal int Objects = 10000, Width = 960, Height = 540, Frames = 120, Warmup = 20;
     internal bool Warp, Test, Probe, View, TestTriangles;
+    internal bool StabilityTriangles;
     internal string Out;
     internal RenderPath[] Paths = { RenderPath.Direct, RenderPath.Indirect, RenderPath.Expanded };
 
@@ -27,6 +28,7 @@ internal sealed class Options
                 case "--warp": options.Warp = true; break;
                 case "--test": options.Test = true; break;
                 case "--test-meshlets": options.TestTriangles = true; break;
+                case "--meshlet-stability": options.TestTriangles = options.StabilityTriangles = true; break;
                 case "--probe": options.Probe = true; break;
                 case "--view": options.View = true; break;
                 case "--objects": options.Objects = Number(args[i], args, ref i, 1, 100000); break;
@@ -74,7 +76,7 @@ internal static class Program
     {
         if (args.Contains("--help"))
         {
-            Console.WriteLine("Navi10 [--probe | --test | --test-meshlets | --view] [--warp] [--objects N] [--width N] [--height N]");
+            Console.WriteLine("Navi10 [--probe | --test | --test-meshlets | --meshlet-stability | --view] [--warp] [--objects N] [--width N] [--height N]");
             Console.WriteLine("       [--frames N] [--warmup N] [--path direct|indirect|expanded] [--out DIRECTORY]");
             return 0;
         }
@@ -112,7 +114,9 @@ internal static class Program
                 Directory.CreateDirectory(folder);
                 if (options.TestTriangles)
                 {
-                    var report = TriangleFixtures.Run(renderer);
+                    var report = options.StabilityTriangles
+                        ? TriangleFixtures.RunStability(renderer, options.Frames, options.Warmup)
+                        : TriangleFixtures.Run(renderer);
                     WriteJson(Path.Combine(folder, "triangle-meshlets.json"), report);
                     if (!report.Passed) return 1;
                 }

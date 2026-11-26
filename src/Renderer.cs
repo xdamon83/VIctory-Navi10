@@ -281,7 +281,7 @@ internal sealed unsafe partial class Renderer : IDisposable
         rtv = CreateView(2, color);
         dsv = CreateView(3, depth);
         visible = Buffer(MeshletCount * 4, D3D.DefaultHeap, D3D.NonPixelShaderResource, "Create meshlet index buffer", true);
-        arguments = Buffer(triangleTest ? 28 : 24, D3D.DefaultHeap, D3D.CopyDest, "Create indirect arguments", true);
+        arguments = Buffer(triangleTest ? TriangleArgumentBytes : 24, D3D.DefaultHeap, D3D.CopyDest, "Create indirect arguments", true);
         resetArguments = Buffer(48, D3D.UploadHeap, D3D.GenericRead, "Create initial arguments");
         statsReadback = Buffer(32, D3D.ReadbackHeap, D3D.CopyDest, "Create statistics readback");
         pixelReadback = Buffer(rowPitch * height, D3D.ReadbackHeap, D3D.CopyDest, "Create pixel readback");

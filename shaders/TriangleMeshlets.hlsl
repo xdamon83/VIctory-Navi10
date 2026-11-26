@@ -19,7 +19,7 @@ struct PrimitiveInput
 cbuffer Limits : register(b0)
 {
     uint MeshletCount, VertexCount, PrimitiveCount, IndexCapacity;
-    uint VertexCapacity;
+    uint VertexCapacity, PrimitiveCapacity, MaterialCapacity;
 };
 
 cbuffer Camera : register(b1)
@@ -58,9 +58,10 @@ RWByteAddressBuffer Arguments : register(u1);
 
 bool ReserveTriangle(out uint start)
 {
+    uint capacity = min(IndexCapacity / 3, min(PrimitiveCapacity, MaterialCapacity)) * 3;
     Arguments.InterlockedAdd(0, 0, start);
     [allow_uav_condition]
-    while (start <= IndexCapacity && IndexCapacity - start >= 3)
+    while (start <= capacity && capacity - start >= 3)
     {
         uint observed;
         Arguments.InterlockedCompareExchange(0, start, start + 3, observed);
@@ -74,7 +75,10 @@ bool ReserveTriangle(out uint start)
 void Expand(uint id : SV_DispatchThreadID)
 {
     if (VertexCount <= VertexCapacity && id < VertexCount)
+    {
         OutputVertices[id] = InputVertices[id];
+        Arguments.InterlockedAdd(28, 1); // vertices written
+    }
 
     if (id >= MeshletCount) return;
     MeshletInput mesh = Meshlets[id];
@@ -99,6 +103,7 @@ void Expand(uint id : SV_DispatchThreadID)
         float4 c = Project(InputVertices[indices.z].position);
         if (OutsideClip(a, b, c))
             continue;
+        Arguments.InterlockedAdd(32, 1); // valid visible triangles requested
         // HLSL 5.1 logical operators may evaluate both operands.
         // Reject vertex overflow before the reservation can change the draw count.
         if (VertexCount > VertexCapacity)
@@ -116,6 +121,7 @@ void Expand(uint id : SV_DispatchThreadID)
         OutputIndices[start + 1] = indices.y;
         OutputIndices[start + 2] = indices.z;
         OutputMaterials[start / 3] = primitive.material;
+        Arguments.InterlockedAdd(36, 1); // complete triangle records written
     }
 }
 

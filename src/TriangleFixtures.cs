@@ -49,6 +49,12 @@ internal sealed class TriangleResult
     public uint[] Materials { get; set; }
     public uint Invalid { get; set; }
     public uint Dropped { get; set; }
+    public uint RequestedVertices { get; set; }
+    public uint AcceptedVertices { get; set; }
+    public uint WrittenVertices { get; set; }
+    public uint RequestedTriangles { get; set; }
+    public uint AcceptedTriangles { get; set; }
+    public uint WrittenTriangles { get; set; }
     public bool ArgumentsValid { get; set; }
     public bool VerticesValid { get; set; }
     public bool IndexGuardIntact { get; set; }
@@ -125,12 +131,35 @@ internal static class TriangleFixtures
         Verify(report, renderer, "zero-capacities", new[] { single }, input, primitives, 0, 0, 0, 1);
         Verify(report, renderer, "zero-index-capacity", new[] { single }, input, primitives, 10, 0, 0, 1);
         Verify(report, renderer, "vertex-overflow", new[] { single }, input, primitives, 9, 3, 0, 1);
+        Verify(report, renderer, "zero-primitive-capacity", new[] { single }, input, primitives, 10, 3, 0, 1,
+            new uint[0], primitiveLimit: 0);
+        Verify(report, renderer, "zero-material-capacity", new[] { single }, input, primitives, 10, 3, 0, 1,
+            new uint[0], materialLimit: 0);
 
         var contenders = Enumerable.Repeat(single, 128).ToArray();
         for (int repeat = 0; repeat < 16; repeat++)
             Verify(report, renderer, "concurrent-index-overflow-" + repeat, contenders,
                 input, primitives, 10, 5, 0, 127, 2, 0, 1, 1);
         VerifyPerspective(report, renderer);
+        return report;
+    }
+
+    internal static Report RunStability(Renderer renderer, int frames, int warmup)
+    {
+        var report = new Report { Passed = true, Hardware = renderer.Hardware, Cases = new List<object>() };
+        var vertices = new[]
+        {
+            new VertexInput(-0.7f, -0.6f, 1, 0, 0), new VertexInput(0.7f, -0.6f, 0, 1, 0),
+            new VertexInput(0, 0.7f, 0, 0, 1)
+        };
+        var meshlets = Enumerable.Repeat(new MeshletInput(0, 3, 0, 1), 128).ToArray();
+        var primitives = new[] { new PrimitiveInput(0, 1, 2, 7) };
+        for (int frame = -warmup; frame < frames; frame++)
+        {
+            Verify(report, renderer, "stability-" + frame, meshlets, vertices, primitives, 3, 5, 0, 127, 0, 1, 2, 7);
+            if (frame < 0) report.Cases.Clear();
+            if (!report.Passed) break;
+        }
         return report;
     }
 
@@ -191,11 +220,19 @@ internal static class TriangleFixtures
         VertexInput[] input, PrimitiveInput[] primitives, int vertexCapacity, int indexCapacity,
         uint invalid, uint dropped, params uint[] expected)
     {
+        return Verify(report, renderer, name, meshlets, input, primitives, vertexCapacity, indexCapacity,
+            invalid, dropped, expected, null, null);
+    }
+
+    private static byte[] Verify(Report report, Renderer renderer, string name, MeshletInput[] meshlets,
+        VertexInput[] input, PrimitiveInput[] primitives, int vertexCapacity, int indexCapacity,
+        uint invalid, uint dropped, uint[] expected, int? primitiveLimit = null, int? materialLimit = null)
+    {
         var expectedIndices = expected.Where((word, i) => i % 4 != 3).ToArray();
         var expectedMaterials = expected.Where((word, i) => i % 4 == 3).ToArray();
         var direct = expectedIndices.Select(i => input[i]).ToArray();
         var result = RunCase(renderer, name, meshlets, input, primitives, vertexCapacity, indexCapacity,
-            direct, expectedMaterials, Identity);
+            direct, expectedMaterials, Identity, primitiveLimit, materialLimit);
         bool indices = result.Indices.Length % 3 == 0 &&
             SortTriangles(result.Indices, null).SequenceEqual(SortTriangles(expectedIndices, null));
         bool materials = indices && SortTriangles(result.Indices, result.Materials)
@@ -204,6 +241,7 @@ internal static class TriangleFixtures
         bool passed = materials && images && OutputValid(result) &&
             result.Invalid == invalid && result.Dropped == dropped;
         report.Cases.Add(new { Name = name, Passed = passed, VertexCapacity = vertexCapacity, IndexCapacity = indexCapacity,
+            PrimitiveCapacity = primitiveLimit ?? indexCapacity / 3, MaterialCapacity = materialLimit ?? indexCapacity / 3,
             ExpectedInvalid = invalid, ExpectedDropped = dropped, IndicesMatch = indices,
             MaterialsMatch = materials, ImagesMatch = images, Gpu = result });
         report.Passed &= passed;
@@ -212,14 +250,17 @@ internal static class TriangleFixtures
 
     private static bool OutputValid(TriangleResult result)
     {
-        return result.ArgumentsValid && result.VerticesValid && result.IndexGuardIntact && result.MaterialGuardIntact;
+        return result.ArgumentsValid && result.VerticesValid && result.IndexGuardIntact && result.MaterialGuardIntact &&
+            result.WrittenVertices == result.AcceptedVertices && result.WrittenTriangles == result.AcceptedTriangles &&
+            result.RequestedTriangles == result.AcceptedTriangles + result.Dropped;
     }
 
     private static TriangleResult RunCase(Renderer renderer, string name, MeshletInput[] meshlets, VertexInput[] input,
         PrimitiveInput[] primitives, int vertexCapacity, int indexCapacity, VertexInput[] reference,
-        uint[] materials, float[] matrix)
+        uint[] materials, float[] matrix, int? primitiveLimit = null, int? materialLimit = null)
     {
-        try { return renderer.RenderTriangles(meshlets, input, primitives, vertexCapacity, indexCapacity, reference, materials, matrix); }
+        try { return renderer.RenderTriangles(meshlets, input, primitives, vertexCapacity, indexCapacity,
+            reference, materials, matrix, primitiveLimit, materialLimit); }
         catch (Exception error) { throw new InvalidOperationException("Triangle fixture failed: " + name, error); }
     }
 

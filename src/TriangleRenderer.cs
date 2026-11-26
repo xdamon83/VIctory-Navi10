@@ -4,6 +4,8 @@ using System.Runtime.InteropServices;
 internal sealed unsafe partial class Renderer
 {
     private const uint Guard = 0xdeadbeef;
+    private const int TriangleArgumentBytes = 40;
+    private const int TriangleDataOffset = 24 + TriangleArgumentBytes;
     private readonly bool triangleTest;
     private ulong referenceAddress;
     private ulong referenceMaterialsAddress;
@@ -13,12 +15,15 @@ internal sealed unsafe partial class Renderer
 
     internal TriangleResult RenderTriangles(MeshletInput[] meshlets, VertexInput[] input,
         PrimitiveInput[] primitives, int vertexCapacity, int indexCapacity, VertexInput[] reference, uint[] materials,
-        float[] transform)
+        float[] transform, int? primitiveLimit = null, int? materialLimit = null)
     {
+        int primitiveCapacity = primitiveLimit ?? indexCapacity / 3;
+        int materialCapacity = materialLimit ?? indexCapacity / 3;
         if (!triangleTest || vertexCapacity < 0 || indexCapacity < 0 ||
             vertexCapacity >= MeshletCount * 24 * 12 / sizeof(VertexInput) ||
             indexCapacity >= MeshletCount * 36 || Math.Max(meshlets.Length, input.Length) > 65535 ||
-            reference.Length % 3 != 0 || reference.Length / 3 != materials.Length || transform.Length != 16)
+            reference.Length % 3 != 0 || reference.Length / 3 != materials.Length || transform.Length != 16 ||
+            primitiveCapacity < 0 || materialCapacity < 0 || materialCapacity > MeshletCount * 12)
             throw new ArgumentException("Invalid triangle fixture size or capacity.");
 
         var constants = new FrameConstants();
@@ -41,36 +46,39 @@ internal sealed unsafe partial class Renderer
 
                 int vertexBytes = (vertexCapacity + 1) * sizeof(VertexInput);
                 int indexBytes = (indexCapacity + 1) * sizeof(uint);
-                int materialBytes = (indexCapacity / 3 + 1) * sizeof(uint);
-                int materialOffset = 52 + vertexBytes + indexBytes;
+                int materialBytes = (materialCapacity + 1) * sizeof(uint);
+                int indexOffset = TriangleDataOffset + vertexBytes;
+                int materialOffset = indexOffset + indexBytes;
                 int readbackBytes = materialOffset + materialBytes;
-                var seed = new uint[Math.Max(vertexBytes, indexBytes) / 4];
+                var seed = new uint[Math.Max(vertexBytes, Math.Max(indexBytes, materialBytes)) / 4];
                 for (int i = 0; i < seed.Length; i++) seed[i] = Guard;
                 IntPtr canaries;
                 fixed (uint* pointer = seed) canaries = Upload(pointer, seed.Length * 4);
 
-                uint* initialArgs = stackalloc uint[7];
-                for (int i = 0; i < 7; i++) initialArgs[i] = 0;
+                uint* initialArgs = stackalloc uint[TriangleArgumentBytes / 4];
+                for (int i = 0; i < TriangleArgumentBytes / 4; i++) initialArgs[i] = 0;
                 initialArgs[1] = 1;
-                IntPtr initial = Upload(initialArgs, 28);
+                IntPtr initial = Upload(initialArgs, TriangleArgumentBytes);
                 IntPtr readback = Buffer(readbackBytes,
                     D3D.ReadbackHeap, D3D.CopyDest, "Create triangle readback");
 
                 BeginTriangleFrame();
-                Copy(arguments, 0, initial, 0, 28);
+                Copy(arguments, 0, initial, 0, TriangleArgumentBytes);
                 Transition(arguments, D3D.CopyDest, D3D.UnorderedAccess);
                 PrepareTriangleOutput(vertices, D3D.NonPixelShaderResource, canaries, vertexBytes);
                 PrepareTriangleOutput(indices, D3D.IndexBuffer, canaries, indexBytes);
                 PrepareTriangleOutput(triangleMaterials, D3D.PixelShaderResource, canaries, materialBytes);
                 D3D.Call<D3D.SetObject>(list, D3D.List.Pipeline)(list, expandPipeline);
                 D3D.Call<D3D.SetObject>(list, D3D.List.ComputeRoot)(list, root);
-                uint* limits = stackalloc uint[5];
+                uint* limits = stackalloc uint[7];
                 limits[0] = (uint)meshlets.Length;
                 limits[1] = (uint)input.Length;
                 limits[2] = (uint)primitives.Length;
                 limits[3] = (uint)indexCapacity;
                 limits[4] = (uint)vertexCapacity;
-                D3D.Call<D3D.SetConstants>(list, D3D.List.ComputeConstants)(list, 0, 5, limits, 0);
+                limits[5] = (uint)primitiveCapacity;
+                limits[6] = (uint)materialCapacity;
+                D3D.Call<D3D.SetConstants>(list, D3D.List.ComputeConstants)(list, 0, 7, limits, 0);
                 fixed (float* matrix = transform)
                     D3D.Call<D3D.SetConstants>(list, D3D.List.ComputeConstants)(list, 13, 16, matrix, 0);
                 var srv = D3D.Call<D3D.SetAddress>(list, D3D.List.ComputeSrv);
@@ -95,10 +103,10 @@ internal sealed unsafe partial class Renderer
                 D3D.Call<D3D.ResolveQuery>(list, D3D.List.ResolveQuery)(list, queries,
                     D3D.QueryTimestamp, 0, 3, readback, 0);
                 Transition(arguments, D3D.IndirectArgument, D3D.CopySource);
-                Copy(readback, 24, arguments, 0, 28);
+                Copy(readback, 24, arguments, 0, TriangleArgumentBytes);
                 Transition(arguments, D3D.CopySource, D3D.CopyDest);
-                ReadTriangleOutput(vertices, D3D.NonPixelShaderResource, readback, 52, vertexBytes);
-                ReadTriangleOutput(indices, D3D.IndexBuffer, readback, 52 + vertexBytes, indexBytes);
+                ReadTriangleOutput(vertices, D3D.NonPixelShaderResource, readback, TriangleDataOffset, vertexBytes);
+                ReadTriangleOutput(indices, D3D.IndexBuffer, readback, indexOffset, indexBytes);
                 ReadTriangleOutput(triangleMaterials, D3D.PixelShaderResource, readback, materialOffset, materialBytes);
                 RecordCapture();
                 SubmitTriangleFrame();
@@ -113,17 +121,24 @@ internal sealed unsafe partial class Renderer
                     uint* args = (uint*)(timestamps + 3);
                     result.GpuComputeMs = (timestamps[1] - timestamps[0]) * (1000.0 / timestampFrequency);
                     result.GpuRasterMs = (timestamps[2] - timestamps[1]) * (1000.0 / timestampFrequency);
-                    result.ArgumentsValid = args[0] <= indexCapacity && args[0] % 3 == 0 &&
+                    uint capacity = (uint)Math.Min(indexCapacity / 3, Math.Min(primitiveCapacity, materialCapacity));
+                    result.ArgumentsValid = args[0] / 3 <= capacity && args[0] % 3 == 0 &&
                         args[1] == 1 && args[2] == 0 && args[3] == 0 && args[4] == 0;
                     result.Invalid = args[5];
                     result.Dropped = args[6];
-                    uint* actualVertices = args + 7;
+                    result.RequestedVertices = (uint)input.Length;
+                    result.AcceptedVertices = input.Length <= vertexCapacity ? (uint)input.Length : 0;
+                    result.WrittenVertices = args[7];
+                    result.RequestedTriangles = args[8];
+                    result.AcceptedTriangles = args[0] / 3;
+                    result.WrittenTriangles = args[9];
+                    uint* actualVertices = args + TriangleArgumentBytes / 4;
                     uint* actualIndices = actualVertices + vertexBytes / 4;
                     int writtenWords = input.Length <= vertexCapacity ? input.Length * sizeof(VertexInput) / 4 : 0;
                     result.VerticesValid = true;
                     for (int i = 0; i < vertexBytes / 4; i++)
                         result.VerticesValid &= actualVertices[i] == (i < writtenWords ? ((uint*)source)[i] : Guard);
-                    int count = (int)Math.Min(args[0], (uint)indexCapacity);
+                    int count = (int)Math.Min(args[0], capacity * 3);
                     result.Indices = new uint[count];
                     for (int i = 0; i < count; i++) result.Indices[i] = actualIndices[i];
                     result.IndexGuardIntact = true;
@@ -132,7 +147,7 @@ internal sealed unsafe partial class Renderer
                     result.Materials = new uint[count / 3];
                     for (int i = 0; i < result.Materials.Length; i++) result.Materials[i] = actualMaterials[i];
                     result.MaterialGuardIntact = true;
-                    for (int i = result.Materials.Length; i <= indexCapacity / 3; i++)
+                    for (int i = result.Materials.Length; i <= materialCapacity; i++)
                         result.MaterialGuardIntact &= actualMaterials[i] == Guard;
                 }
                 finally
