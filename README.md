@@ -4,7 +4,11 @@ VIctory-Navi10 is an independent, experimental Direct3D 12 graphics laboratory f
 
 Full Xbox emulation is outside the project's scope. GTA VI has not been tested. The measurements below describe this laboratory.
 
-Version 0.2 adds a synthetic triangle meshlet path with perspective clipping, shared vertices, interpolated normals and flat materials. It runs as an independent fixture alongside the three city rendering paths. [Triangle fixtures](docs/triangle-meshlets.md) · [Data and synchronization contract](docs/data-sync-contract.md).
+The v0.3.0 candidate accepts versioned meshlet packets from an external translator. It supports indexed triangle geometry, flat per-primitive materials, perspective clipping and one to three frames in flight. The simulator and packet specification are the starting point for integrating another frontend. [Adapter](docs/translator-adapter.md) · [Scaling protocol](docs/scaling.md).
+
+![One million candidate triangles from the animated 1080p scale benchmark on the RX 5700 XT](docs/images/scale-million.png)
+
+At 1 million candidate triangles and 720p, GPU geometry time fell from 38.52 ms to 4.59 ms in a controlled comparison of two compaction implementations. [Release measurements](docs/RELEASE-v0.3.0.md) · [Raw results](benchmarks/raw/v0.3.0/).
 
 ![Procedural city rendered on a Radeon RX 5700 XT using compute-generated indexed geometry](docs/images/city-10000.png)
 
@@ -33,6 +37,8 @@ $exe = .\build.ps1
 & $exe --probe --out .\runs
 .\tests\verify.ps1 -Executable $exe
 & $exe --test-meshlets --out .\runs\triangles
+.\tests\translator.ps1 -Executable $exe
+& $exe --meshlet-scale 100000 --meshlet-prefix --animate-tiles --frames-in-flight 2 --out .\runs\scale
 & $exe --view --objects 10000
 ```
 
@@ -70,7 +76,7 @@ All 24 image comparisons across the four object counts matched the direct path e
 
 ## Current limits
 
-The city expansion shader targets fixed quad-based meshlets and an orthographic camera. The triangle fixtures support variable-size indexed geometry and perspective, with one opaque draw and one frame in flight. General shader translation, amplification shader emulation, and integration into VIctory are research goals. The capability probe reports wave-size support and queue availability. The group-size study varies threads per group. It leaves hardware wave selection to the driver. [Protocol](benchmarks/README.md).
+The city expansion shader targets fixed quad-based meshlets and an orthographic camera. The packet renderer accepts one opaque triangle-list draw with a fixed attribute layout. General shader translation, amplification shaders and in-process integration into VIctory remain research goals. The renderer uses one direct queue. Hardware wave selection is driver-controlled. [Protocol](benchmarks/README.md).
 
 ## Contribute
 
