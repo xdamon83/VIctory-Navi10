@@ -20,9 +20,11 @@ internal sealed class Options
     internal int ScaleTriangles;
     internal bool BatchedTriangles;
     internal string PacketPath;
+    internal uint? PacketVersion;
     internal bool FastReservation, ReuseInputVertices;
     internal bool GroupCompact;
     internal bool AnimateTiles;
+    internal int GeometryBudgetMiB;
     internal int FramesInFlight = 1;
     internal string Out;
     internal RenderPath[] Paths = { RenderPath.Direct, RenderPath.Indirect, RenderPath.Expanded };
@@ -46,6 +48,7 @@ internal sealed class Options
                 case "--meshlet-full-capacity": options.FastReservation = options.BatchedTriangles = true; break;
                 case "--reuse-input-vertices": options.ReuseInputVertices = true; break;
                 case "--animate-tiles": options.AnimateTiles = true; break;
+                case "--geometry-budget-mib": options.GeometryBudgetMiB = Number(args[i], args, ref i, 1, 8192); break;
                 case "--meshlet-prefix":
                     options.GroupCompact = options.FastReservation = options.ReuseInputVertices = options.BatchedTriangles = true;
                     options.TriangleGroupSize = 32;
@@ -124,6 +127,12 @@ internal static class Program
                 if (options.ScaleTriangles != 0 || options.StabilityTriangles)
                     throw new ArgumentException("Choose one meshlet workload.");
                 packet = MeshletPacket.Read(options.PacketPath);
+                options.PacketVersion = packet.Version;
+                if (packet.Version == 2)
+                {
+                    options.GroupCompact = options.FastReservation = options.ReuseInputVertices = options.BatchedTriangles = true;
+                    options.TriangleGroupSize = 32;
+                }
                 options.ScaleTriangles = packet.Primitives.Length;
             }
             if ((options.AnimateTiles && (options.PacketPath != null || options.ScaleTriangles == 0)) ||
@@ -139,7 +148,7 @@ internal static class Program
                 options.TestTriangles ? 64 : options.Objects, options.Warp, shader, options.Probe,
                 options.TestTriangles, options.TriangleGroupSize, options.ScaleTriangles, options.BatchedTriangles,
                 options.FramesInFlight, packet, options.FastReservation, options.ReuseInputVertices, options.GroupCompact,
-                options.AnimateTiles))
+                options.AnimateTiles, options.GeometryBudgetMiB))
             {
                 if (options.Probe)
                 {
@@ -215,8 +224,8 @@ internal static class Program
         {
             Passed = passed, renderer.Hardware, options.Width, options.Height, options.Warmup, options.TriangleGroupSize,
             options.BatchedTriangles, options.FastReservation, options.ReuseInputVertices, options.GroupCompact, options.FramesInFlight,
-            options.AnimateTiles, RequestedTriangles = options.ScaleTriangles,
-            PacketVersion = options.PacketPath == null ? (int?)null : 1,
+            options.AnimateTiles, options.GeometryBudgetMiB, RequestedTriangles = options.ScaleTriangles,
+            options.PacketVersion,
             MeasuredFps = throughput, renderer.ScaleUploadBytes,
             Comparisons = comparisons, Frames = frames
         });

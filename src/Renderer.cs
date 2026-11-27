@@ -47,7 +47,7 @@ internal sealed unsafe partial class Renderer : IDisposable
     internal Renderer(int width, int height, int objects, bool warp, string shaderFile, bool probeOnly = false,
         bool triangleTest = false, int triangleGroupSize = 1, int scaleTriangles = 0, bool batchedTriangles = false,
         int framesInFlight = 1, MeshletPacket packet = null, bool fastReservation = false, bool reuseInputVertices = false,
-        bool groupCompact = false, bool animateTiles = false)
+        bool groupCompact = false, bool animateTiles = false, int geometryBudgetMiB = 0)
     {
         this.width = width;
         this.height = height;
@@ -66,6 +66,7 @@ internal sealed unsafe partial class Renderer : IDisposable
         this.reuseInputVertices = reuseInputVertices;
         this.groupCompact = groupCompact;
         this.animateTiles = animateTiles;
+        this.geometryBudgetMiB = geometryBudgetMiB;
         if (groupCompact && (triangleGroupSize != 32 || !fastReservation || !reuseInputVertices))
             throw new ArgumentException("Group compaction requires 32 threads and a fully provisioned immutable input.");
         try

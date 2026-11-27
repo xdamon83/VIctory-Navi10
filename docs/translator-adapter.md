@@ -1,4 +1,4 @@
-# Meshlet packet interface v1
+# Meshlet packet interface
 
 A translator can submit a file to `Navi10.exe --meshlet-packet FILE --meshlet-prefix --frames-in-flight 2 --out runs/import`. The core consumer is `MeshletPacket.Read`. The renderer uploads the geometry once, records a compute dispatch and issues an indexed indirect draw. A separate raster draw uses independently flattened CPU indices and materials. The process returns zero only on success and writes counters, exact image comparisons and native GPU timestamps to `scale.json`. The PowerShell simulator in `tests/translator.ps1` implements the producer independently and includes seven malformed packet tests.
 
@@ -18,3 +18,9 @@ The adapter derives dispatch dimensions and output capacity from the validated p
 The backend owns its D3D12 resources and command queue. The 20-byte draw record is `IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation` with the latter four fields set to 1, 0, 0, 0. A successful frame reports the observed triangle count after reading and verifying this record. Primitive order can vary. Version 1 accepts triangle lists with a fixed attribute layout and opaque, order-independent shading. General shader payloads, amplification work generation, arbitrary attribute semantics, order-dependent blending and live cross-device handle sharing require a richer interface.
 
 The upstream comparison and licensing boundary are documented in [integration notes](integration-notes.md). The packet format, simulator and renderer are original MIT code.
+
+## Explicit command packets (version 2)
+
+Keep the same magic and change the version word to 2. After the matrix, insert eight little-endian uint32 words before the meshlet table. The first three are the dispatch group counts X, Y, Z. X and Y are between 1 and 65,535, their product must equal the number of meshlets, and Z must be one. This selects the 32-thread prefix kernel, with one group per meshlet and a full-capacity immutable vertex stream. The next five words are the indexed indirect argument template `[0, 1, 0, 0, 0]`. The backend copies the template to the argument buffer, compute fills its index count and the raster pass consumes it through ExecuteIndirect. These restrictions keep offsets and capacities under host control.
+
+The simulator submits both versions, checks external visibility against GPU readback and exercises 15 malformed packets, including each dispatch and draw field. Run `tests/translator.ps1` from PowerShell.

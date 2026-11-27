@@ -160,6 +160,11 @@ internal sealed unsafe partial class Renderer
         if (groupCompact) groups = meshletCount;
         int rows = (groups + 65534) / 65535;
         int columns = (groups + rows - 1) / rows;
+        if (packetDispatchX != 0)
+        {
+            columns = (int)packetDispatchX;
+            rows = (int)packetDispatchY;
+        }
         uint* limits = stackalloc uint[10];
         limits[0] = (uint)meshletCount;
         limits[1] = (uint)vertexCount;

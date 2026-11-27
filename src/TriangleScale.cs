@@ -26,9 +26,11 @@ internal sealed unsafe partial class Renderer
     private readonly bool batchedTriangles;
     private MeshletPacket incomingPacket;
     private bool externalCamera;
+    private uint packetDispatchX, packetDispatchY;
     private readonly bool fastReservation, reuseInputVertices;
     private readonly bool groupCompact;
     private readonly bool animateTiles;
+    private readonly int geometryBudgetMiB;
     private float tileSize, animationPhase;
     private int scaleVertices, scaleMeshlets;
     private ulong scaleMeshletAddress, scalePrimitiveAddress;
@@ -56,14 +58,17 @@ internal sealed unsafe partial class Renderer
     private void InitializeScaleBuffers()
     {
         D3D.VideoMemory memory;
-        if (incomingPacket == null && TryGetVideoMemory(out memory) && memory.Budget > memory.Usage)
+        ulong budget = geometryBudgetMiB > 0 ? (ulong)geometryBudgetMiB << 20 : UInt64.MaxValue;
+        if (TryGetVideoMemory(out memory) && memory.Budget != 0)
+            budget = Math.Min(budget, memory.Budget > memory.Usage ? (memory.Budget - memory.Usage) / 2 : 0);
+        if (incomingPacket == null)
         {
             // Conservative upper bound includes reference streams, the vertex UAV and fan overhead.
-            ulong limit = (memory.Budget - memory.Usage) / 2 / 180;
+            ulong limit = budget / 180;
             if (limit == 0) throw new InvalidOperationException("Insufficient local video memory for triangle geometry.");
             if ((ulong)scaleTriangles > limit)
             {
-                Console.Error.WriteLine("DXGI budget reduced synthetic triangles from {0} to {1}.", scaleTriangles, limit);
+                Console.Error.WriteLine("Geometry budget reduced synthetic triangles from {0} to {1}.", scaleTriangles, limit);
                 scaleTriangles = (int)limit;
             }
         }
@@ -75,6 +80,8 @@ internal sealed unsafe partial class Renderer
             scaleMeshlets = incomingPacket.Meshlets.Length;
             scaleVertices = incomingPacket.Vertices.Length;
             externalCamera = true;
+            packetDispatchX = incomingPacket.GroupsX;
+            packetDispatchY = incomingPacket.GroupsY;
         }
         int indexBytes = checked(scaleTriangles * 3 * sizeof(uint));
         int vertexBytes = checked(scaleVertices * sizeof(VertexInput));
@@ -82,9 +89,8 @@ internal sealed unsafe partial class Renderer
         ScaleUploadBytes = (long)vertexBytes + indexBytes + materialBytes +
             (long)scaleMeshlets * sizeof(MeshletInput) + (long)scaleTriangles * sizeof(PrimitiveInput);
         ulong outputBytes = (ulong)vertexBytes + (ulong)indexBytes + (ulong)materialBytes;
-        if (TryGetVideoMemory(out memory) && memory.Budget != 0 &&
-            (memory.Usage >= memory.Budget || (ulong)ScaleUploadBytes + outputBytes > (memory.Budget - memory.Usage) / 2))
-            throw new InvalidOperationException("Triangle workload exceeds half the remaining DXGI local memory budget. Use a smaller workload.");
+        if ((ulong)ScaleUploadBytes + outputBytes > budget)
+            throw new InvalidOperationException("Triangle workload exceeds the available geometry budget.");
 
         var meshlets = incomingPacket == null ? new MeshletInput[scaleMeshlets] : incomingPacket.Meshlets;
         var input = incomingPacket == null ? new VertexInput[scaleVertices] : incomingPacket.Vertices;
@@ -163,6 +169,8 @@ internal sealed unsafe partial class Renderer
         uint* initial = stackalloc uint[TriangleArgumentBytes / 4];
         for (int i = 0; i < TriangleArgumentBytes / 4; i++) initial[i] = 0;
         initial[1] = 1;
+        if (incomingPacket != null && incomingPacket.DrawTemplate != null)
+            for (int i = 0; i < 5; i++) initial[i] = incomingPacket.DrawTemplate[i];
         scaleReset = Upload(initial, TriangleArgumentBytes);
         scaleSlots = new TriangleSlot[FramesInFlight];
         for (int i = 0; i < scaleSlots.Length; i++)

@@ -27,7 +27,7 @@ $original = [IO.File]::ReadAllBytes($packet)
 foreach ($case in 'version','count','truncated','local-index','visibility','range','nan') {
     $bytes = [byte[]]$original.Clone()
     switch ($case) {
-        version { $bytes[4] = 2 }
+        version { $bytes[4] = 3 }
         count { $bytes[19] = 128 }
         truncated { $bytes = [byte[]]$bytes[0..($bytes.Length - 2)] }
         'local-index' { $bytes[$bytes.Length - 16] = 254 }
@@ -40,4 +40,26 @@ foreach ($case in 'version','count','truncated','local-index','visibility','rang
     $errors = & $Executable --meshlet-packet $bad --frames 1 --out $dir 2>&1 | Out-String
     if ($LASTEXITCODE -ne 1 -or $errors -notmatch 'InvalidDataException') { throw "Unexpected rejection for $case" }
 }
-Write-Output 'External packet passed 12 frames and seven rejection tests.'
+$v2 = New-Object byte[] ($original.Length + 32)
+[Array]::Copy($original,0,$v2,0,84)
+$v2[4] = 2
+# Explicit 1 x 2 x 1 dispatch and one indexed draw instance.
+$v2[84] = 1; $v2[88] = 2; $v2[92] = 1; $v2[100] = 1
+[Array]::Copy($original,84,$v2,116,$original.Length - 84)
+$commandPacket = Join-Path $dir 'commands.vnm'
+[IO.File]::WriteAllBytes($commandPacket,$v2)
+& $Executable --meshlet-packet $commandPacket --frames 12 --warmup 3 --width 128 --height 128 --out "$dir/v2" | Out-Null
+if ($LASTEXITCODE) { throw 'Explicit command packet failed.' }
+$v2Report = Get-Content "$dir/v2/scale.json" -Raw | ConvertFrom-Json
+if (!$v2Report.Passed -or $v2Report.PacketVersion -ne 2 -or @($v2Report.Frames | Where-Object VisibleTriangles -ne 1).Count) {
+    throw 'Explicit command result mismatch.'
+}
+foreach ($offset in 84,88,92,96,100,104,108,112) {
+    $bad = [byte[]]$v2.Clone()
+    $bad[$offset] = 3
+    $badPath = Join-Path $dir "invalid-command-$offset.vnm"
+    [IO.File]::WriteAllBytes($badPath,$bad)
+    $errors = & $Executable --meshlet-packet $badPath --frames 1 --out $dir 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 1 -or $errors -notmatch 'InvalidDataException') { throw "Unsafe command accepted at $offset" }
+}
+Write-Output 'Both packet versions passed 12 frames each and 15 malformed packets were rejected.'
