@@ -1,12 +1,14 @@
 param(
     [string]$Executable,
     [string]$Out = (Join-Path $PSScriptRoot '../runs/v030-scale'),
-    [ValidateSet('matrix','ab','memory','overlap','stability')][string]$Mode = 'matrix',
+    [ValidateSet('matrix','ab','prefix','memory','overlap','stability')][string]$Mode = 'matrix',
     [int]$Frames = 24,
     [int]$Warmup = 6,
     [int]$GroupSize = 64,
     [int]$StabilityTriangles = 100000,
-    [ValidateRange(1,3)][int]$FramesInFlight = 1
+    [ValidateRange(1,3)][int]$FramesInFlight = 1,
+    [switch]$Prefix,
+    [switch]$AnimateTiles
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,6 +24,8 @@ function Run-Scale([string]$Name, [int]$Triangles, [int]$Height, [int]$Group, [b
     if ($Batch) { $flags += '--meshlet-batched' }
     if ($Fast) { $flags += '--meshlet-full-capacity' }
     if ($Reuse) { $flags += '--reuse-input-vertices' }
+    if ($Prefix -and ($Mode -ne 'prefix' -or $Name -like '*-b*')) { $flags += '--meshlet-prefix' }
+    if ($AnimateTiles) { $flags += '--animate-tiles' }
     & $Executable @flags | Out-Null
     if ($LASTEXITCODE) { throw "Scale run failed on $Name." }
     $result = Get-Content -LiteralPath (Join-Path $folder 'scale.json') -Raw | ConvertFrom-Json
@@ -65,6 +69,11 @@ $results = if ($Mode -eq 'matrix') {
     }
     foreach ($group in 32, 64, 128, 256) {
         Run-Scale "1000000-group-$group" 1000000 720 $group $true $Frames
+    }
+} elseif ($Mode -eq 'prefix') {
+    if (!$Prefix) { throw 'Prefix comparison requires -Prefix.' }
+    foreach ($label in 'a1','b1','b2','a2') {
+        Run-Scale "1000000-$label" 1000000 720 32 $true $Frames 1 $true $true
     }
 } elseif ($Mode -eq 'memory') {
     foreach ($reuse in $false,$true,$true,$false) {

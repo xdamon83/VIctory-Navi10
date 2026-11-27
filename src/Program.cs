@@ -21,6 +21,8 @@ internal sealed class Options
     internal bool BatchedTriangles;
     internal string PacketPath;
     internal bool FastReservation, ReuseInputVertices;
+    internal bool GroupCompact;
+    internal bool AnimateTiles;
     internal int FramesInFlight = 1;
     internal string Out;
     internal RenderPath[] Paths = { RenderPath.Direct, RenderPath.Indirect, RenderPath.Expanded };
@@ -43,6 +45,11 @@ internal sealed class Options
                 case "--meshlet-batched": options.BatchedTriangles = true; break;
                 case "--meshlet-full-capacity": options.FastReservation = options.BatchedTriangles = true; break;
                 case "--reuse-input-vertices": options.ReuseInputVertices = true; break;
+                case "--animate-tiles": options.AnimateTiles = true; break;
+                case "--meshlet-prefix":
+                    options.GroupCompact = options.FastReservation = options.ReuseInputVertices = options.BatchedTriangles = true;
+                    options.TriangleGroupSize = 32;
+                    break;
                 case "--meshlet-packet":
                     options.PacketPath = Value(args[i], args, ref i);
                     options.TestTriangles = true;
@@ -104,6 +111,8 @@ internal static class Program
             Console.WriteLine("       [--frames N] [--warmup N] [--path direct|indirect|expanded] [--out DIRECTORY]");
             Console.WriteLine("       [--meshlet-scale N | --meshlet-stability] [--meshlet-group-size 1|32|64|128|256] [--meshlet-batched]");
             Console.WriteLine("       [--frames-in-flight 1|2|3] for --meshlet-scale");
+            Console.WriteLine("       [--meshlet-packet FILE] [--meshlet-full-capacity] [--reuse-input-vertices]");
+            Console.WriteLine("       [--meshlet-prefix] [--animate-tiles]");
             return 0;
         }
         try
@@ -117,6 +126,9 @@ internal static class Program
                 packet = MeshletPacket.Read(options.PacketPath);
                 options.ScaleTriangles = packet.Primitives.Length;
             }
+            if ((options.AnimateTiles && (options.PacketPath != null || options.ScaleTriangles == 0)) ||
+                (options.ScaleTriangles != 0 && options.StabilityTriangles))
+                throw new ArgumentException("Conflicting meshlet workload options.");
             if (options.TestTriangles && (options.Probe || options.Test || options.View))
                 throw new ArgumentException("--test-meshlets is a separate rendering mode.");
             if (options.FramesInFlight != 1 && options.ScaleTriangles == 0)
@@ -126,7 +138,8 @@ internal static class Program
             using (var renderer = new Renderer(options.Width, options.Height,
                 options.TestTriangles ? 64 : options.Objects, options.Warp, shader, options.Probe,
                 options.TestTriangles, options.TriangleGroupSize, options.ScaleTriangles, options.BatchedTriangles,
-                options.FramesInFlight, packet, options.FastReservation, options.ReuseInputVertices))
+                options.FramesInFlight, packet, options.FastReservation, options.ReuseInputVertices, options.GroupCompact,
+                options.AnimateTiles))
             {
                 if (options.Probe)
                 {
@@ -201,7 +214,9 @@ internal static class Program
         WriteJson(Path.Combine(folder, "scale.json"), new
         {
             Passed = passed, renderer.Hardware, options.Width, options.Height, options.Warmup, options.TriangleGroupSize,
-            options.BatchedTriangles, options.FastReservation, options.ReuseInputVertices, options.FramesInFlight,
+            options.BatchedTriangles, options.FastReservation, options.ReuseInputVertices, options.GroupCompact, options.FramesInFlight,
+            options.AnimateTiles, RequestedTriangles = options.ScaleTriangles,
+            PacketVersion = options.PacketPath == null ? (int?)null : 1,
             MeasuredFps = throughput, renderer.ScaleUploadBytes,
             Comparisons = comparisons, Frames = frames
         });

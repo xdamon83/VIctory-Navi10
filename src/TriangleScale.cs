@@ -22,11 +22,14 @@ internal sealed class TriangleScaleFrame
 
 internal sealed unsafe partial class Renderer
 {
-    private readonly int scaleTriangles;
+    private int scaleTriangles;
     private readonly bool batchedTriangles;
     private MeshletPacket incomingPacket;
     private bool externalCamera;
     private readonly bool fastReservation, reuseInputVertices;
+    private readonly bool groupCompact;
+    private readonly bool animateTiles;
+    private float tileSize, animationPhase;
     private int scaleVertices, scaleMeshlets;
     private ulong scaleMeshletAddress, scalePrimitiveAddress;
     private IntPtr scaleReset, scaleReferencePixels;
@@ -52,6 +55,18 @@ internal sealed unsafe partial class Renderer
 
     private void InitializeScaleBuffers()
     {
+        D3D.VideoMemory memory;
+        if (incomingPacket == null && TryGetVideoMemory(out memory) && memory.Budget > memory.Usage)
+        {
+            // Conservative upper bound includes reference streams, the vertex UAV and fan overhead.
+            ulong limit = (memory.Budget - memory.Usage) / 2 / 180;
+            if (limit == 0) throw new InvalidOperationException("Insufficient local video memory for triangle geometry.");
+            if ((ulong)scaleTriangles > limit)
+            {
+                Console.Error.WriteLine("DXGI budget reduced synthetic triangles from {0} to {1}.", scaleTriangles, limit);
+                scaleTriangles = (int)limit;
+            }
+        }
         for (int remaining = scaleTriangles; remaining > 0; scaleMeshlets++)
             remaining -= TriangleCountForMeshlet(scaleMeshlets, remaining);
         scaleVertices = checked(scaleTriangles + scaleMeshlets * 2);
@@ -66,7 +81,6 @@ internal sealed unsafe partial class Renderer
         int materialBytes = checked(scaleTriangles * sizeof(uint));
         ScaleUploadBytes = (long)vertexBytes + indexBytes + materialBytes +
             (long)scaleMeshlets * sizeof(MeshletInput) + (long)scaleTriangles * sizeof(PrimitiveInput);
-        D3D.VideoMemory memory;
         ulong outputBytes = (ulong)vertexBytes + (ulong)indexBytes + (ulong)materialBytes;
         if (TryGetVideoMemory(out memory) && memory.Budget != 0 &&
             (memory.Usage >= memory.Budget || (ulong)ScaleUploadBytes + outputBytes > (memory.Budget - memory.Usage) / 2))
@@ -79,6 +93,7 @@ internal sealed unsafe partial class Renderer
         var materials = new uint[scaleTriangles];
         int edge = (int)Math.Ceiling(Math.Sqrt(scaleMeshlets));
         float step = 5.8f / edge;
+        tileSize = animateTiles && !externalCamera ? step : 0;
         int v = 0, t = 0;
         for (int m = 0; incomingPacket == null && m < scaleMeshlets; m++)
         {
@@ -186,6 +201,7 @@ internal sealed unsafe partial class Renderer
         if (slot.PendingFence != 0) throw new InvalidOperationException("Triangle frame slot is still occupied.");
         if (!externalCamera)
         {
+            animationPhase = frame * 0.027f;
             triangleTransform[3] = 0.72f * (float)Math.Sin(frame * 0.037);
             triangleTransform[7] = 0.52f * (float)Math.Cos(frame * 0.041);
         }

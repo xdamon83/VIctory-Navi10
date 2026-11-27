@@ -46,7 +46,8 @@ internal sealed unsafe partial class Renderer : IDisposable
 
     internal Renderer(int width, int height, int objects, bool warp, string shaderFile, bool probeOnly = false,
         bool triangleTest = false, int triangleGroupSize = 1, int scaleTriangles = 0, bool batchedTriangles = false,
-        int framesInFlight = 1, MeshletPacket packet = null, bool fastReservation = false, bool reuseInputVertices = false)
+        int framesInFlight = 1, MeshletPacket packet = null, bool fastReservation = false, bool reuseInputVertices = false,
+        bool groupCompact = false, bool animateTiles = false)
     {
         this.width = width;
         this.height = height;
@@ -63,6 +64,10 @@ internal sealed unsafe partial class Renderer : IDisposable
             throw new ArgumentException("Static input shortcuts require validated scale or packet input.");
         this.fastReservation = fastReservation;
         this.reuseInputVertices = reuseInputVertices;
+        this.groupCompact = groupCompact;
+        this.animateTiles = animateTiles;
+        if (groupCompact && (triangleGroupSize != 32 || !fastReservation || !reuseInputVertices))
+            throw new ArgumentException("Group compaction requires 32 threads and a fully provisioned immutable input.");
         try
         {
             IntPtr adapter = OpenAdapter(warp);
@@ -184,7 +189,7 @@ internal sealed unsafe partial class Renderer : IDisposable
         parameters[10] = new D3D.RootParameter { Type = 3, Register = 4 };
         parameters[11] = new D3D.RootParameter { Type = 3, Register = 5 };
         parameters[12] = new D3D.RootParameter { Type = 3, Register = 6, Visibility = 5 }; // pixel SRV
-        parameters[13] = new D3D.RootParameter { Type = 1, Register = 1, Constants = 16 };
+        parameters[13] = new D3D.RootParameter { Type = 1, Register = 1, Constants = 18 };
         var description = new D3D.RootDescription { Count = triangleTest ? 14 : 9, Parameters = parameters };
         IntPtr serialized, error;
         D3D.CheckCompiler(D3D.D3D12SerializeRootSignature(&description, 1, out serialized, out error),
@@ -220,7 +225,7 @@ internal sealed unsafe partial class Renderer : IDisposable
         if (triangleTest)
             expansionEntry = batchedTriangles ? "Batch" + TriangleGroupSize :
                 TriangleGroupSize == 1 ? "Expand" : "Expand" + TriangleGroupSize;
-        var expand = new D3D.ComputePipeline { Root = root, CS = Compile(source, expansionEntry, "cs_5_1") };
+        var expand = new D3D.ComputePipeline { Root = root, CS = Compile(source, groupCompact ? "Compact32" : expansionEntry, "cs_5_1") };
         expandPipeline = Create(D3D.Device.CreateComputePipeline, &expand, D3D.PipelineId, "Create expansion pipeline");
         signature = MakeSignature(0, 16);
         indexedSignature = MakeSignature(1, 20);
@@ -444,8 +449,7 @@ internal sealed unsafe partial class Renderer : IDisposable
         {
             D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 12,
                 path == RenderPath.Direct ? referenceMaterialsAddress : Address(triangleMaterials));
-            fixed (float* transform = triangleTransform)
-                D3D.Call<D3D.SetConstants>(list, D3D.List.GraphicsConstants)(list, 13, 16, transform, 0);
+            SetTriangleCamera(D3D.List.GraphicsConstants);
         }
         var viewport = new D3D.Viewport { Width = width, Height = height, MaxDepth = 1 };
         var scissor = new D3D.Rect { Right = width, Bottom = height };

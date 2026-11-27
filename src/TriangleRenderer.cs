@@ -157,6 +157,7 @@ internal sealed unsafe partial class Renderer
     {
         int items = Math.Max(1, reuseInputVertices ? meshletCount : Math.Max(meshletCount, vertexCount));
         int groups = (items + TriangleGroupSize - 1) / TriangleGroupSize;
+        if (groupCompact) groups = meshletCount;
         int rows = (groups + 65534) / 65535;
         int columns = (groups + rows - 1) / rows;
         uint* limits = stackalloc uint[10];
@@ -173,8 +174,7 @@ internal sealed unsafe partial class Renderer
         D3D.Call<D3D.SetObject>(list, D3D.List.Pipeline)(list, expandPipeline);
         D3D.Call<D3D.SetObject>(list, D3D.List.ComputeRoot)(list, root);
         D3D.Call<D3D.SetConstants>(list, D3D.List.ComputeConstants)(list, 0, 10, limits, 0);
-        fixed (float* matrix = triangleTransform)
-            D3D.Call<D3D.SetConstants>(list, D3D.List.ComputeConstants)(list, 13, 16, matrix, 0);
+        SetTriangleCamera(D3D.List.ComputeConstants);
         var srv = D3D.Call<D3D.SetAddress>(list, D3D.List.ComputeSrv);
         srv(list, 9, meshlets);
         srv(list, 10, input);
@@ -191,6 +191,16 @@ internal sealed unsafe partial class Renderer
         Transition(indices, D3D.UnorderedAccess, D3D.IndexBuffer);
         Transition(triangleMaterials, D3D.UnorderedAccess, D3D.PixelShaderResource);
         Timestamp(1);
+    }
+
+    private void SetTriangleCamera(int method)
+    {
+        var set = D3D.Call<D3D.SetConstants>(list, method);
+        fixed (float* matrix = triangleTransform) set(list, 13, 16, matrix, 0);
+        float* animation = stackalloc float[2];
+        animation[0] = tileSize;
+        animation[1] = animationPhase;
+        set(list, 13, 2, animation, 16);
     }
 
     private IntPtr Upload(void* source, int size)

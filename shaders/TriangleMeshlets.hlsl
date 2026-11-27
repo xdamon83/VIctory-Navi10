@@ -27,10 +27,20 @@ cbuffer Limits : register(b0)
 cbuffer Camera : register(b1)
 {
     row_major float4x4 WorldViewProjection;
+    float TileSize, AnimationPhase;
 };
 
 float4 Project(float3 position)
 {
+    if (TileSize > 0)
+    {
+        float2 cell = floor((position.xy + 2.9) / TileSize);
+        float2 center = (cell + 0.5) * TileSize - 2.9;
+        float2 delta = position.xy - center;
+        float sine, cosine;
+        sincos(AnimationPhase + 0.13 * cell.x + 0.17 * cell.y, sine, cosine);
+        position.xy = center + float2(cosine * delta.x - sine * delta.y, sine * delta.x + cosine * delta.y);
+    }
     return mul(WorldViewProjection, float4(position, 1));
 }
 
@@ -201,6 +211,58 @@ EXPANSION(Batch32, 32, ExpandBatch(id.x + id.y * RowThreads, 32))
 EXPANSION(Batch64, 64, ExpandBatch(id.x + id.y * RowThreads, 64))
 EXPANSION(Batch128, 128, ExpandBatch(id.x + id.y * RowThreads, 128))
 EXPANSION(Batch256, 256, ExpandBatch(id.x + id.y * RowThreads, 256))
+
+// Host contract: disjoint primitive ranges, validated local indices, immutable shared vertices
+// and output room for the full input. One group owns one meshlet.
+groupshared uint VisibleMask;
+groupshared uint FirstIndex;
+[numthreads(32, 1, 1)]
+void Compact32(uint3 group : SV_GroupID, uint lane : SV_GroupIndex)
+{
+    uint meshId = group.x + group.y * (RowThreads / 32);
+    if (meshId >= MeshletCount) return;
+    MeshletInput mesh = Meshlets[meshId];
+    for (uint base = 0; base < mesh.primitiveCount; base += 32)
+    {
+        if (lane == 0) VisibleMask = 0;
+        GroupMemoryBarrierWithGroupSync();
+        uint index = base + lane;
+        uint3 corners = 0;
+        uint material = 0;
+        bool keep = false;
+        if (index < mesh.primitiveCount)
+        {
+            PrimitiveInput primitive = Primitives[mesh.primitiveOffset + index];
+            corners = primitive.corners + mesh.vertexOffset;
+            material = primitive.material;
+            keep = !OutsideClip(Project(InputVertices[corners.x].position),
+                                Project(InputVertices[corners.y].position),
+                                Project(InputVertices[corners.z].position));
+            if (keep) InterlockedOr(VisibleMask, 1u << lane);
+        }
+        GroupMemoryBarrierWithGroupSync();
+        uint mask = VisibleMask;
+        if (lane == 0 && mask != 0)
+        {
+            uint count = countbits(mask);
+            uint address;
+            Arguments.InterlockedAdd(0, count * 3, address);
+            FirstIndex = address;
+            Arguments.InterlockedAdd(32, count);
+        }
+        GroupMemoryBarrierWithGroupSync();
+        if (keep)
+        {
+            uint start = FirstIndex + 3 * countbits(mask & ((1u << lane) - 1u));
+            OutputIndices[start] = corners.x;
+            OutputIndices[start + 1] = corners.y;
+            OutputIndices[start + 2] = corners.z;
+            OutputMaterials[start / 3] = material;
+        }
+        GroupMemoryBarrierWithGroupSync();
+        if (lane == 0 && mask != 0) Arguments.InterlockedAdd(36, countbits(mask));
+    }
+}
 
 struct Varyings
 {
