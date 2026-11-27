@@ -1,4 +1,4 @@
-# VIctory-Navi10 v0.3.0 candidate
+# VIctory-Navi10 v0.3.0
 
 The MIT laboratory now consumes portable geometry packets emitted by an external program. The simulator exercises host visibility, projection, 2D dispatch and indexed indirect draws. The renderer keeps geometry resident and uses fences to retire one, two or three CPU submissions on a single direct queue.
 
@@ -8,4 +8,6 @@ The 15-cell matrix spans 10,000 to 5 million candidate triangles and 540p, 720p 
 
 The v0.2 renderer had no million-triangle benchmark. A small-fixture rerun on each version gave group-64 means of 9.11 and 8.45 microseconds respectively. At one thread the mean of A1/A2 increased from 8.29 to 9.93 microseconds. Results on such small inputs varied between repeats. The scaling A/B gains should not be applied to arbitrary workloads.
 
-The release candidate includes source, scripts, captured images and raw results. The group-size and frame-slot experiments do not establish simultaneous execution on independent GPU queues. The Vulkan component is a capability probe. The laboratory is independent and GTA VI has not been tested.
+The release includes source, scripts, captured images and raw results. The renderer uses one Direct3D 12 direct queue. The Vulkan component probes capabilities. The laboratory is independent and GTA VI has not been tested.
+
+VIctory developers with RDNA 1 hardware are invited to run the minimal packet and share their results. [Integration guide and example](https://github.com/xdamon83/VIctory-Navi10/blob/v0.3.0/docs/quick-integration.md) · [Raw JSON and CSV](https://github.com/xdamon83/VIctory-Navi10/tree/v0.3.0/benchmarks/raw/v0.3.0).

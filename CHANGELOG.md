@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.3.0 candidate
+## v0.3.0
 
 - Added validated external meshlet packets, explicit bounded dispatch and indexed draw templates, a simulator and negative tests.
 - Added a resident geometry benchmark with animated meshlets, conventional indexed reference draws and one to three fenced frame slots.

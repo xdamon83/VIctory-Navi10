@@ -4,7 +4,7 @@ VIctory-Navi10 is an independent, experimental Direct3D 12 graphics laboratory f
 
 Full Xbox emulation is outside the project's scope. GTA VI has not been tested. The measurements below describe this laboratory.
 
-The v0.3.0 candidate accepts versioned meshlet packets from an external translator. It supports indexed triangle geometry, flat per-primitive materials, perspective clipping and one to three frames in flight. The simulator and packet specification are the starting point for integrating another frontend. [Adapter](docs/translator-adapter.md) · [Scaling protocol](docs/scaling.md).
+Version 0.3.0 accepts versioned meshlet packets from an external translator. It supports indexed triangle geometry, flat per-primitive materials, perspective clipping and one to three frames in flight. VIctory developers with RDNA 1 hardware are invited to test the example and share their results. [Quick integration guide](docs/quick-integration.md) · [Scaling protocol](docs/scaling.md).
 
 ![One million candidate triangles from the animated 1080p scale benchmark on the RX 5700 XT](docs/images/scale-million.png)
 
