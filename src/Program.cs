@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
@@ -16,6 +17,11 @@ internal sealed class Options
     internal bool Warp, Test, Probe, View, TestTriangles;
     internal bool StabilityTriangles;
     internal int TriangleGroupSize = 1;
+    internal int ScaleTriangles;
+    internal bool BatchedTriangles;
+    internal string PacketPath;
+    internal bool FastReservation, ReuseInputVertices;
+    internal int FramesInFlight = 1;
     internal string Out;
     internal RenderPath[] Paths = { RenderPath.Direct, RenderPath.Indirect, RenderPath.Expanded };
 
@@ -30,10 +36,22 @@ internal sealed class Options
                 case "--test": options.Test = true; break;
                 case "--test-meshlets": options.TestTriangles = true; break;
                 case "--meshlet-stability": options.TestTriangles = options.StabilityTriangles = true; break;
+                case "--meshlet-scale":
+                    options.TestTriangles = true;
+                    options.ScaleTriangles = Number(args[i], args, ref i, 1, 5000000);
+                    break;
+                case "--meshlet-batched": options.BatchedTriangles = true; break;
+                case "--meshlet-full-capacity": options.FastReservation = options.BatchedTriangles = true; break;
+                case "--reuse-input-vertices": options.ReuseInputVertices = true; break;
+                case "--meshlet-packet":
+                    options.PacketPath = Value(args[i], args, ref i);
+                    options.TestTriangles = true;
+                    break;
+                case "--frames-in-flight": options.FramesInFlight = Number(args[i], args, ref i, 1, 3); break;
                 case "--meshlet-group-size":
-                    options.TriangleGroupSize = Number(args[i], args, ref i, 1, 64);
-                    if (options.TriangleGroupSize != 1 && options.TriangleGroupSize != 32 && options.TriangleGroupSize != 64)
-                        throw new ArgumentException("--meshlet-group-size expects 1, 32 or 64.");
+                    options.TriangleGroupSize = Number(args[i], args, ref i, 1, 256);
+                    if (!new[] { 1, 32, 64, 128, 256 }.Contains(options.TriangleGroupSize))
+                        throw new ArgumentException("--meshlet-group-size expects 1, 32, 64, 128 or 256.");
                     break;
                 case "--probe": options.Probe = true; break;
                 case "--view": options.View = true; break;
@@ -84,19 +102,31 @@ internal static class Program
         {
             Console.WriteLine("Navi10 [--probe | --test | --test-meshlets | --meshlet-stability | --view] [--warp] [--objects N] [--width N] [--height N]");
             Console.WriteLine("       [--frames N] [--warmup N] [--path direct|indirect|expanded] [--out DIRECTORY]");
-            Console.WriteLine("       [--meshlet-group-size 1|32|64]");
+            Console.WriteLine("       [--meshlet-scale N | --meshlet-stability] [--meshlet-group-size 1|32|64|128|256] [--meshlet-batched]");
+            Console.WriteLine("       [--frames-in-flight 1|2|3] for --meshlet-scale");
             return 0;
         }
         try
         {
             Options options = Options.Parse(args);
+            MeshletPacket packet = null;
+            if (options.PacketPath != null)
+            {
+                if (options.ScaleTriangles != 0 || options.StabilityTriangles)
+                    throw new ArgumentException("Choose one meshlet workload.");
+                packet = MeshletPacket.Read(options.PacketPath);
+                options.ScaleTriangles = packet.Primitives.Length;
+            }
             if (options.TestTriangles && (options.Probe || options.Test || options.View))
                 throw new ArgumentException("--test-meshlets is a separate rendering mode.");
+            if (options.FramesInFlight != 1 && options.ScaleTriangles == 0)
+                throw new ArgumentException("--frames-in-flight requires --meshlet-scale.");
             string shader = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
                 options.TestTriangles ? "TriangleMeshlets.hlsl" : "City.hlsl");
             using (var renderer = new Renderer(options.Width, options.Height,
                 options.TestTriangles ? 64 : options.Objects, options.Warp, shader, options.Probe,
-                options.TestTriangles, options.TriangleGroupSize))
+                options.TestTriangles, options.TriangleGroupSize, options.ScaleTriangles, options.BatchedTriangles,
+                options.FramesInFlight, packet, options.FastReservation, options.ReuseInputVertices))
             {
                 if (options.Probe)
                 {
@@ -120,7 +150,8 @@ internal static class Program
                     DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", Invariant));
                 folder = Path.GetFullPath(folder);
                 Directory.CreateDirectory(folder);
-                if (options.TestTriangles)
+                if (options.ScaleTriangles > 0) TestScaledTriangles(renderer, options, folder);
+                else if (options.TestTriangles)
                 {
                     var report = options.StabilityTriangles
                         ? TriangleFixtures.RunStability(renderer, options.Frames, options.Warmup)
@@ -138,6 +169,62 @@ internal static class Program
         {
             Console.Error.WriteLine(failure);
             return 1;
+        }
+    }
+
+    private static void TestScaledTriangles(Renderer renderer, Options options, string folder)
+    {
+        var pixels = new byte[renderer.Width * renderer.Height * 4];
+        var reference = new byte[pixels.Length];
+        var comparisons = new List<TriangleScaleFrame>();
+        foreach (int frame in new[] { 0, 23, 61 })
+        {
+            comparisons.Add(renderer.RenderScaledTriangles(frame, pixels, reference));
+            if (frame == 0)
+            {
+                SavePng(pixels, renderer, Path.Combine(folder, "compute.png"));
+                SavePng(reference, renderer, Path.Combine(folder, "direct.png"));
+            }
+        }
+        bool passed = comparisons.All(x => x.ImagesMatch == true);
+        var frames = new List<TriangleScaleFrame>(options.Frames);
+        double throughput = 0;
+        if (passed)
+        {
+            RunScaledFrames(renderer, -options.Warmup, options.Warmup, null);
+            var elapsed = Stopwatch.StartNew();
+            RunScaledFrames(renderer, 0, options.Frames, frames);
+            throughput = options.Frames / elapsed.Elapsed.TotalSeconds;
+            comparisons.Add(renderer.RenderScaledTriangles(options.Frames, pixels, reference));
+            passed = comparisons.Last().ImagesMatch == true;
+        }
+        WriteJson(Path.Combine(folder, "scale.json"), new
+        {
+            Passed = passed, renderer.Hardware, options.Width, options.Height, options.Warmup, options.TriangleGroupSize,
+            options.BatchedTriangles, options.FastReservation, options.ReuseInputVertices, options.FramesInFlight,
+            MeasuredFps = throughput, renderer.ScaleUploadBytes,
+            Comparisons = comparisons, Frames = frames
+        });
+        if (!passed) throw new InvalidOperationException("Scaled triangle image comparison failed. See scale.json.");
+    }
+
+    private static void RunScaledFrames(Renderer renderer, int first, int count, List<TriangleScaleFrame> frames)
+    {
+        int slots = renderer.FramesInFlight;
+        for (int index = 0; index < count; index++)
+        {
+            int slot = index % slots;
+            if (index >= slots)
+            {
+                var previous = renderer.ReadScaledTriangles(slot);
+                if (frames != null) frames.Add(previous);
+            }
+            renderer.QueueScaledTriangles(first + index, slot);
+        }
+        for (int index = Math.Max(0, count - slots); index < count; index++)
+        {
+            var previous = renderer.ReadScaledTriangles(index % slots);
+            if (frames != null) frames.Add(previous);
         }
     }
 

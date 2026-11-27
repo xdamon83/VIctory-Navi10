@@ -69,37 +69,8 @@ internal sealed unsafe partial class Renderer
                 PrepareTriangleOutput(vertices, D3D.NonPixelShaderResource, canaries, vertexBytes);
                 PrepareTriangleOutput(indices, D3D.IndexBuffer, canaries, indexBytes);
                 PrepareTriangleOutput(triangleMaterials, D3D.PixelShaderResource, canaries, materialBytes);
-                D3D.Call<D3D.SetObject>(list, D3D.List.Pipeline)(list, expandPipeline);
-                D3D.Call<D3D.SetObject>(list, D3D.List.ComputeRoot)(list, root);
-                uint* limits = stackalloc uint[7];
-                limits[0] = (uint)meshlets.Length;
-                limits[1] = (uint)input.Length;
-                limits[2] = (uint)primitives.Length;
-                limits[3] = (uint)indexCapacity;
-                limits[4] = (uint)vertexCapacity;
-                limits[5] = (uint)primitiveCapacity;
-                limits[6] = (uint)materialCapacity;
-                D3D.Call<D3D.SetConstants>(list, D3D.List.ComputeConstants)(list, 0, 7, limits, 0);
-                fixed (float* matrix = transform)
-                    D3D.Call<D3D.SetConstants>(list, D3D.List.ComputeConstants)(list, 13, 16, matrix, 0);
-                var srv = D3D.Call<D3D.SetAddress>(list, D3D.List.ComputeSrv);
-                srv(list, 9, meshletAddress);
-                srv(list, 10, inputAddress);
-                srv(list, 11, primitiveAddress);
-                var uav = D3D.Call<D3D.SetAddress>(list, D3D.List.ComputeUav);
-                uav(list, 3, argumentsAddress);
-                uav(list, 5, vertexAddress);
-                uav(list, 6, indexView.Address);
-                uav(list, 8, Address(triangleMaterials));
-                Timestamp(0);
-                int itemCount = Math.Max(1, Math.Max(meshlets.Length, input.Length));
-                uint groups = (uint)((itemCount + TriangleGroupSize - 1) / TriangleGroupSize);
-                D3D.Call<D3D.Dispatch>(list, D3D.List.Dispatch)(list, groups, 1, 1);
-                Transition(arguments, D3D.UnorderedAccess, D3D.IndirectArgument);
-                Transition(vertices, D3D.UnorderedAccess, D3D.NonPixelShaderResource);
-                Transition(indices, D3D.UnorderedAccess, D3D.IndexBuffer);
-                Transition(triangleMaterials, D3D.UnorderedAccess, D3D.PixelShaderResource);
-                Timestamp(1);
+                RecordTriangleExpansion(meshletAddress, inputAddress, primitiveAddress, meshlets.Length,
+                    input.Length, primitives.Length, vertexCapacity, indexCapacity, primitiveCapacity, materialCapacity);
                 RecordRaster(&constants, RenderPath.Expanded);
                 Timestamp(2);
                 D3D.Call<D3D.ResolveQuery>(list, D3D.List.ResolveQuery)(list, queries,
@@ -180,6 +151,48 @@ internal sealed unsafe partial class Renderer
 
     private ulong Address(IntPtr resource) { return D3D.Call<D3D.GetU64>(resource, 11)(resource); }
 
+    private void RecordTriangleExpansion(ulong meshlets, ulong input, ulong primitives,
+        int meshletCount, int vertexCount, int primitiveCount, int vertexCapacity, int indexCapacity,
+        int primitiveCapacity, int materialCapacity)
+    {
+        int items = Math.Max(1, reuseInputVertices ? meshletCount : Math.Max(meshletCount, vertexCount));
+        int groups = (items + TriangleGroupSize - 1) / TriangleGroupSize;
+        int rows = (groups + 65534) / 65535;
+        int columns = (groups + rows - 1) / rows;
+        uint* limits = stackalloc uint[10];
+        limits[0] = (uint)meshletCount;
+        limits[1] = (uint)vertexCount;
+        limits[2] = (uint)primitiveCount;
+        limits[3] = (uint)indexCapacity;
+        limits[4] = (uint)vertexCapacity;
+        limits[5] = (uint)primitiveCapacity;
+        limits[6] = (uint)materialCapacity;
+        limits[7] = (uint)(columns * TriangleGroupSize);
+        limits[8] = fastReservation ? 1u : 0u;
+        limits[9] = reuseInputVertices ? 1u : 0u;
+        D3D.Call<D3D.SetObject>(list, D3D.List.Pipeline)(list, expandPipeline);
+        D3D.Call<D3D.SetObject>(list, D3D.List.ComputeRoot)(list, root);
+        D3D.Call<D3D.SetConstants>(list, D3D.List.ComputeConstants)(list, 0, 10, limits, 0);
+        fixed (float* matrix = triangleTransform)
+            D3D.Call<D3D.SetConstants>(list, D3D.List.ComputeConstants)(list, 13, 16, matrix, 0);
+        var srv = D3D.Call<D3D.SetAddress>(list, D3D.List.ComputeSrv);
+        srv(list, 9, meshlets);
+        srv(list, 10, input);
+        srv(list, 11, primitives);
+        var uav = D3D.Call<D3D.SetAddress>(list, D3D.List.ComputeUav);
+        uav(list, 3, argumentsAddress);
+        uav(list, 5, reuseInputVertices ? Address(vertices) : vertexAddress);
+        uav(list, 6, indexView.Address);
+        uav(list, 8, Address(triangleMaterials));
+        Timestamp(0);
+        D3D.Call<D3D.Dispatch>(list, D3D.List.Dispatch)(list, (uint)columns, (uint)rows, 1);
+        Transition(arguments, D3D.UnorderedAccess, D3D.IndirectArgument);
+        if (!reuseInputVertices) Transition(vertices, D3D.UnorderedAccess, D3D.NonPixelShaderResource);
+        Transition(indices, D3D.UnorderedAccess, D3D.IndexBuffer);
+        Transition(triangleMaterials, D3D.UnorderedAccess, D3D.PixelShaderResource);
+        Timestamp(1);
+    }
+
     private IntPtr Upload(void* source, int size)
     {
         IntPtr upload = Buffer(Math.Max(size, 4), D3D.UploadHeap, D3D.GenericRead, "Create triangle fixture upload");
@@ -207,19 +220,26 @@ internal sealed unsafe partial class Renderer
         Transition(buffer, D3D.CopySource, state);
     }
 
-    private void BeginTriangleFrame()
+    private void BeginTriangleFrame(IntPtr frameAllocator = default(IntPtr))
     {
-        D3D.Check(D3D.Call<D3D.NoArgs>(allocator, 8)(allocator), "Reset triangle allocator");
-        D3D.Check(D3D.Call<D3D.ResetList>(list, D3D.List.Reset)(list, allocator, IntPtr.Zero), "Reset triangle list");
+        if (frameAllocator == IntPtr.Zero) frameAllocator = allocator;
+        D3D.Check(D3D.Call<D3D.NoArgs>(frameAllocator, 8)(frameAllocator), "Reset triangle allocator");
+        D3D.Check(D3D.Call<D3D.ResetList>(list, D3D.List.Reset)(list, frameAllocator, IntPtr.Zero), "Reset triangle list");
     }
 
     private void SubmitTriangleFrame()
+    {
+        QueueTriangleFrame();
+        WaitForFrame();
+    }
+
+    private void QueueTriangleFrame()
     {
         D3D.Check(D3D.Call<D3D.NoArgs>(list, D3D.List.Close)(list), "Close triangle list");
         IntPtr command = list;
         D3D.Call<D3D.Execute>(queue, 10)(queue, 1, &command);
         inFlight = true;
         D3D.Check(D3D.Call<D3D.Signal>(queue, 14)(queue, fence, ++sequence), "Signal triangle fence");
-        WaitForFrame();
+        if (submit.IsRunning) submit.Stop();
     }
 }

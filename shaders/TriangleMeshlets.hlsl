@@ -20,6 +20,8 @@ cbuffer Limits : register(b0)
 {
     uint MeshletCount, VertexCount, PrimitiveCount, IndexCapacity;
     uint VertexCapacity, PrimitiveCapacity, MaterialCapacity;
+    uint RowThreads;
+    uint UniqueFullCapacity, ReuseInputVertices;
 };
 
 cbuffer Camera : register(b1)
@@ -56,15 +58,15 @@ RWStructuredBuffer<uint> OutputIndices : register(u3);
 RWStructuredBuffer<uint> OutputMaterials : register(u4);
 RWByteAddressBuffer Arguments : register(u1);
 
-bool ReserveTriangle(out uint start)
+bool ReserveIndices(uint count, out uint start)
 {
     uint capacity = min(IndexCapacity / 3, min(PrimitiveCapacity, MaterialCapacity)) * 3;
     Arguments.InterlockedAdd(0, 0, start);
     [allow_uav_condition]
-    while (start <= capacity && capacity - start >= 3)
+    while (start <= capacity && capacity - start >= count)
     {
         uint observed;
-        Arguments.InterlockedCompareExchange(0, start, start + 3, observed);
+        Arguments.InterlockedCompareExchange(0, start, start + count, observed);
         if (observed == start) return true;
         start = observed;
     }
@@ -73,7 +75,7 @@ bool ReserveTriangle(out uint start)
 
 void ExpandMeshlet(uint id)
 {
-    if (VertexCount <= VertexCapacity && id < VertexCount)
+    if (!ReuseInputVertices && VertexCount <= VertexCapacity && id < VertexCount)
     {
         OutputVertices[id] = InputVertices[id];
         Arguments.InterlockedAdd(28, 1); // vertices written
@@ -111,7 +113,7 @@ void ExpandMeshlet(uint id)
             continue;
         }
         uint start;
-        if (!ReserveTriangle(start))
+        if (!ReserveIndices(3u, start))
         {
             Arguments.InterlockedAdd(24, 1);
             continue;
@@ -124,14 +126,81 @@ void ExpandMeshlet(uint id)
     }
 }
 
-[numthreads(1, 1, 1)]
-void Expand(uint id : SV_DispatchThreadID) { ExpandMeshlet(id); }
+void ExpandBatch(uint id, uint groupWidth)
+{
+    if (!ReuseInputVertices && VertexCount <= VertexCapacity && id < VertexCount)
+    {
+        OutputVertices[id] = InputVertices[id];
+        if (id % groupWidth == 0)
+            Arguments.InterlockedAdd(28, min(groupWidth, VertexCount - id));
+    }
+    if (id >= MeshletCount) return;
+    MeshletInput mesh = Meshlets[id];
+    if (mesh.vertexOffset > VertexCount || mesh.vertexCount > VertexCount - mesh.vertexOffset ||
+        mesh.primitiveOffset > PrimitiveCount || mesh.primitiveCount > PrimitiveCount - mesh.primitiveOffset)
+    {
+        Arguments.InterlockedAdd(20, 1);
+        return;
+    }
+    uint requested = 0, written = 0, invalid = 0;
+    for (uint first = 0; first < mesh.primitiveCount;)
+    {
+        uint length = min(32u, mesh.primitiveCount - first);
+        uint mask = 0;
+        for (uint i = 0; i < length; ++i)
+        {
+            uint3 local = Primitives[mesh.primitiveOffset + first + i].corners;
+            if (any(local >= mesh.vertexCount)) { ++invalid; continue; }
+            uint3 corners = local + mesh.vertexOffset;
+            if (!OutsideClip(Project(InputVertices[corners.x].position),
+                             Project(InputVertices[corners.y].position),
+                             Project(InputVertices[corners.z].position)))
+                mask |= 1u << i;
+        }
+        first += length;
+        uint count = countbits(mask);
+        requested += count;
+        if (count == 0 || VertexCount > VertexCapacity) continue;
+        uint start;
+        bool batch = true;
+        if (UniqueFullCapacity)
+            Arguments.InterlockedAdd(0, 3u * count, start);
+        else
+            batch = ReserveIndices(3u * count, start);
+        while (mask)
+        {
+            uint i = firstbitlow(mask);
+            mask &= mask - 1u;
+            if (!batch)
+                if (!ReserveIndices(3u, start)) break;
+            PrimitiveInput primitive = Primitives[mesh.primitiveOffset + first - length + i];
+            uint3 corners = primitive.corners + mesh.vertexOffset;
+            OutputIndices[start] = corners.x;
+            OutputIndices[start + 1] = corners.y;
+            OutputIndices[start + 2] = corners.z;
+            OutputMaterials[start / 3] = primitive.material;
+            start += 3;
+            ++written;
+        }
+    }
+    if (invalid) Arguments.InterlockedAdd(20, invalid);
+    if (requested != written) Arguments.InterlockedAdd(24, requested - written);
+    if (requested) Arguments.InterlockedAdd(32, requested);
+    if (written) Arguments.InterlockedAdd(36, written);
+}
 
-[numthreads(32, 1, 1)]
-void Expand32(uint id : SV_DispatchThreadID) { ExpandMeshlet(id); }
-
-[numthreads(64, 1, 1)]
-void Expand64(uint id : SV_DispatchThreadID) { ExpandMeshlet(id); }
+#define EXPANSION(name, width, call) \
+    [numthreads(width, 1, 1)] void name(uint3 id : SV_DispatchThreadID) { call; }
+EXPANSION(Expand, 1, ExpandMeshlet(id.x + id.y * RowThreads))
+EXPANSION(Expand32, 32, ExpandMeshlet(id.x + id.y * RowThreads))
+EXPANSION(Expand64, 64, ExpandMeshlet(id.x + id.y * RowThreads))
+EXPANSION(Expand128, 128, ExpandMeshlet(id.x + id.y * RowThreads))
+EXPANSION(Expand256, 256, ExpandMeshlet(id.x + id.y * RowThreads))
+EXPANSION(Batch1, 1, ExpandBatch(id.x + id.y * RowThreads, 1))
+EXPANSION(Batch32, 32, ExpandBatch(id.x + id.y * RowThreads, 32))
+EXPANSION(Batch64, 64, ExpandBatch(id.x + id.y * RowThreads, 64))
+EXPANSION(Batch128, 128, ExpandBatch(id.x + id.y * RowThreads, 128))
+EXPANSION(Batch256, 256, ExpandBatch(id.x + id.y * RowThreads, 256))
 
 struct Varyings
 {

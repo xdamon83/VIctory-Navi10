@@ -45,7 +45,8 @@ internal sealed unsafe partial class Renderer : IDisposable
     internal readonly HardwareReport Hardware;
 
     internal Renderer(int width, int height, int objects, bool warp, string shaderFile, bool probeOnly = false,
-        bool triangleTest = false, int triangleGroupSize = 1)
+        bool triangleTest = false, int triangleGroupSize = 1, int scaleTriangles = 0, bool batchedTriangles = false,
+        int framesInFlight = 1, MeshletPacket packet = null, bool fastReservation = false, bool reuseInputVertices = false)
     {
         this.width = width;
         this.height = height;
@@ -54,6 +55,14 @@ internal sealed unsafe partial class Renderer : IDisposable
         rowPitch = (width * 4 + 255) & ~255;
         this.triangleTest = triangleTest;
         TriangleGroupSize = triangleGroupSize;
+        this.scaleTriangles = scaleTriangles;
+        this.batchedTriangles = batchedTriangles;
+        FramesInFlight = framesInFlight;
+        incomingPacket = packet;
+        if ((fastReservation || reuseInputVertices) && scaleTriangles <= 0)
+            throw new ArgumentException("Static input shortcuts require validated scale or packet input.");
+        this.fastReservation = fastReservation;
+        this.reuseInputVertices = reuseInputVertices;
         try
         {
             IntPtr adapter = OpenAdapter(warp);
@@ -207,7 +216,10 @@ internal sealed unsafe partial class Renderer : IDisposable
             var cull = new D3D.ComputePipeline { Root = root, CS = Compile(source, "Cull", "cs_5_1") };
             cullPipeline = Create(D3D.Device.CreateComputePipeline, &cull, D3D.PipelineId, "CreateComputePipelineState");
         }
-        string expansionEntry = triangleTest && TriangleGroupSize != 1 ? "Expand" + TriangleGroupSize : "Expand";
+        string expansionEntry = "Expand";
+        if (triangleTest)
+            expansionEntry = batchedTriangles ? "Batch" + TriangleGroupSize :
+                TriangleGroupSize == 1 ? "Expand" : "Expand" + TriangleGroupSize;
         var expand = new D3D.ComputePipeline { Root = root, CS = Compile(source, expansionEntry, "cs_5_1") };
         expandPipeline = Create(D3D.Device.CreateComputePipeline, &expand, D3D.PipelineId, "Create expansion pipeline");
         signature = MakeSignature(0, 16);
@@ -276,17 +288,22 @@ internal sealed unsafe partial class Renderer : IDisposable
 
     private void InitializeBuffers()
     {
-        var queryDesc = new D3D.QueryHeapDescription { Type = 1, Count = 3 };
+        var queryDesc = new D3D.QueryHeapDescription { Type = 1, Count = scaleTriangles > 0 ? 5 : 3 };
         queries = Create(D3D.Device.CreateQueryHeap, &queryDesc, D3D.QueryHeapId, "CreateQueryHeap");
         color = Texture(D3D.Rgba8, D3D.RenderTarget, 1, "Create color texture");
         depth = Texture(D3D.D32, D3D.DepthWrite, 2, "Create depth texture");
         rtv = CreateView(2, color);
         dsv = CreateView(3, depth);
+        pixelReadback = Buffer(rowPitch * height, D3D.ReadbackHeap, D3D.CopyDest, "Create pixel readback");
+        if (scaleTriangles > 0)
+        {
+            InitializeScaleBuffers();
+            return;
+        }
         visible = Buffer(MeshletCount * 4, D3D.DefaultHeap, D3D.NonPixelShaderResource, "Create meshlet index buffer", true);
         arguments = Buffer(triangleTest ? TriangleArgumentBytes : 24, D3D.DefaultHeap, D3D.CopyDest, "Create indirect arguments", true);
         resetArguments = Buffer(48, D3D.UploadHeap, D3D.GenericRead, "Create initial arguments");
         statsReadback = Buffer(32, D3D.ReadbackHeap, D3D.CopyDest, "Create statistics readback");
-        pixelReadback = Buffer(rowPitch * height, D3D.ReadbackHeap, D3D.CopyDest, "Create pixel readback");
         vertices = Buffer(MeshletCount * 24 * 12, D3D.DefaultHeap, D3D.NonPixelShaderResource, "Create expanded positions", true);
         quadAttributes = Buffer(MeshletCount * 6 * 16, D3D.DefaultHeap, D3D.NonPixelShaderResource, "Create quad attributes", true);
         if (triangleTest)
@@ -419,10 +436,10 @@ internal sealed unsafe partial class Renderer : IDisposable
         D3D.Call<D3D.SetObject>(list, D3D.List.Pipeline)(list, rasterPipeline);
         D3D.Call<D3D.SetObject>(list, D3D.List.GraphicsRoot)(list, root);
         D3D.Call<D3D.SetConstants>(list, D3D.List.GraphicsConstants)(list, 0, 16, constants, 0);
-        D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 1, visibleAddress);
+        if (!triangleTest) D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 1, visibleAddress);
         D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 4,
             triangleTest && path == RenderPath.Direct ? referenceAddress : vertexAddress);
-        D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 7, attributesAddress);
+        if (!triangleTest) D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 7, attributesAddress);
         if (triangleTest)
         {
             D3D.Call<D3D.SetAddress>(list, D3D.List.GraphicsSrv)(list, 12,
@@ -452,30 +469,37 @@ internal sealed unsafe partial class Renderer : IDisposable
             D3D.Call<D3D.ExecuteIndirect>(list, D3D.List.ExecuteIndirect)(list, expanded ? indexedSignature : signature,
                 1, arguments, 0, IntPtr.Zero, 0);
         }
+        else if (scaleTriangles > 0)
+        {
+            var index = scaleReferenceIndex;
+            D3D.Call<D3D.SetIndexBuffer>(list, D3D.List.SetIndex)(list, &index);
+            D3D.Call<D3D.DrawIndexedInstanced>(list, D3D.List.DrawIndexed)(list, referenceCount, 1, 0, 0, 0);
+        }
         else
             D3D.Call<D3D.DrawInstanced>(list, D3D.List.Draw)(list,
                 triangleTest ? referenceCount : 36u, triangleTest ? 1u : (uint)MeshletCount, 0, 0);
     }
 
-    private void RecordCapture()
+    private void RecordCapture(IntPtr readback = default(IntPtr))
     {
         Transition(color, D3D.RenderTarget, D3D.CopySource);
         var source = new D3D.TextureCopyLocation { Resource = color };
         var destination = new D3D.TextureCopyLocation
         {
-            Resource = pixelReadback, Type = 1, Format = D3D.Rgba8, Width = (uint)width,
+            Resource = readback == IntPtr.Zero ? pixelReadback : readback, Type = 1, Format = D3D.Rgba8, Width = (uint)width,
             Height = (uint)height, Depth = 1, RowPitch = (uint)rowPitch
         };
         D3D.Call<D3D.CopyTexture>(list, D3D.List.CopyTexture)(list, &destination, 0, 0, 0, &source, IntPtr.Zero);
         Transition(color, D3D.CopySource, D3D.RenderTarget);
     }
 
-    internal void ReadPixels(byte[] destination)
+    internal void ReadPixels(byte[] destination, IntPtr readback = default(IntPtr))
     {
         if (destination.Length != width * height * 4) throw new ArgumentException("Invalid RGBA buffer length.");
+        if (readback == IntPtr.Zero) readback = pixelReadback;
         var range = new D3D.Range(0, (uint)(rowPitch * height));
         IntPtr data;
-        D3D.Check(D3D.Call<D3D.Map>(pixelReadback, 8)(pixelReadback, 0, &range, out data), "Map color capture");
+        D3D.Check(D3D.Call<D3D.Map>(readback, 8)(readback, 0, &range, out data), "Map color capture");
         try
         {
             for (int y = 0; y < height; y++)
@@ -484,20 +508,25 @@ internal sealed unsafe partial class Renderer : IDisposable
         finally
         {
             range = new D3D.Range(0, 0);
-            D3D.Call<D3D.Unmap>(pixelReadback, 9)(pixelReadback, 0, &range);
+            D3D.Call<D3D.Unmap>(readback, 9)(readback, 0, &range);
         }
     }
 
     private void WaitForFrame()
     {
-        if (D3D.Call<D3D.GetU64>(fence, 8)(fence) < sequence)
+        WaitForSequence(sequence);
+    }
+
+    private void WaitForSequence(ulong target)
+    {
+        if (D3D.Call<D3D.GetU64>(fence, 8)(fence) < target)
         {
-            D3D.Check(D3D.Call<D3D.SetEventWhenComplete>(fence, 9)(fence, sequence, completed), "SetEventOnCompletion");
+            D3D.Check(D3D.Call<D3D.SetEventWhenComplete>(fence, 9)(fence, target, completed), "SetEventOnCompletion");
             uint status = D3D.WaitForSingleObject(completed, 15000);
             if (status != 0)
                 throw new InvalidOperationException(String.Format("GPU fence wait failed (status 0x{0:X8})", status));
         }
-        inFlight = false;
+        if (target == sequence) inFlight = false;
         D3D.Check(D3D.Call<D3D.NoArgs>(device, D3D.Device.RemovedReason)(device), "GetDeviceRemovedReason");
     }
 

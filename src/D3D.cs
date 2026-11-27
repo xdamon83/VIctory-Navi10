@@ -54,7 +54,7 @@ internal static unsafe class D3D
 
     internal static class List
     {
-        internal const int Close = 9, Reset = 10, Draw = 12, Dispatch = 14, CopyBuffer = 15,
+        internal const int Close = 9, Reset = 10, Draw = 12, DrawIndexed = 13, Dispatch = 14, CopyBuffer = 15,
             CopyTexture = 16, PrimitiveTopology = 20, SetViewports = 21, SetScissors = 22,
             Pipeline = 25, Barriers = 26, ComputeRoot = 29, GraphicsRoot = 30,
             ComputeConstants = 35, GraphicsConstants = 36, ComputeSrv = 39, GraphicsSrv = 40, ComputeUav = 41,
@@ -229,6 +229,7 @@ internal static unsafe class D3D
     internal delegate void ClearRtv(IntPtr self, ulong handle, float* color, uint count, Rect* rects);
     internal delegate void ClearDsv(IntPtr self, ulong handle, int flags, float depth, byte stencil, uint count, Rect* rects);
     internal delegate void DrawInstanced(IntPtr self, uint vertices, uint instances, uint vertex, uint instance);
+    internal delegate void DrawIndexedInstanced(IntPtr self, uint indices, uint instances, uint start, int vertex, uint instance);
     internal delegate void Dispatch(IntPtr self, uint x, uint y, uint z);
     internal delegate void Barriers(IntPtr self, uint count, TransitionBarrier* barriers);
     internal delegate void ExecuteIndirect(IntPtr self, IntPtr signature, uint count, IntPtr arguments,
