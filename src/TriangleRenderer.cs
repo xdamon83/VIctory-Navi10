@@ -11,6 +11,7 @@ internal sealed unsafe partial class Renderer
     private ulong referenceMaterialsAddress;
     private IntPtr triangleMaterials;
     private float[] triangleTransform;
+    internal int TriangleGroupSize { get; private set; }
     private uint referenceCount;
 
     internal TriangleResult RenderTriangles(MeshletInput[] meshlets, VertexInput[] input,
@@ -91,8 +92,9 @@ internal sealed unsafe partial class Renderer
                 uav(list, 6, indexView.Address);
                 uav(list, 8, Address(triangleMaterials));
                 Timestamp(0);
-                D3D.Call<D3D.Dispatch>(list, D3D.List.Dispatch)(list,
-                    (uint)Math.Max(1, Math.Max(meshlets.Length, input.Length)), 1, 1);
+                int itemCount = Math.Max(1, Math.Max(meshlets.Length, input.Length));
+                uint groups = (uint)((itemCount + TriangleGroupSize - 1) / TriangleGroupSize);
+                D3D.Call<D3D.Dispatch>(list, D3D.List.Dispatch)(list, groups, 1, 1);
                 Transition(arguments, D3D.UnorderedAccess, D3D.IndirectArgument);
                 Transition(vertices, D3D.UnorderedAccess, D3D.NonPixelShaderResource);
                 Transition(indices, D3D.UnorderedAccess, D3D.IndexBuffer);

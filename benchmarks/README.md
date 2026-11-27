@@ -15,3 +15,17 @@ The frame time covers command recording, submission, and completion of one GPU f
 For each layout, the README reports the mean compute and frame times across its two equal-length runs and the highest recorded process-local memory usage. Times are rounded after combining the runs.
 
 Run `benchmarks/run.ps1` to reproduce the compact series. The script stores new runs under `runs/`.
+
+## Triangle fixtures in v0.2.0
+
+`meshlets.ps1` reproduces the group-size study and stability run. The target is 64 × 64. Each frame submits 128 overlapping candidates that compete for capacity for one triangle, then compares with a direct reference. The script discards 20 warmup frames per run. The capture order is A1 (1 thread), B32 (32), B64 (64) and A2 (1), 300 frames each, followed by 2,000 stability frames at 1 thread per group. Group size counts threads in a dispatch group. Hardware wave size was left to the driver.
+
+| RX 5700 XT run | Mean GPU compute time (ms) | P99 (ms) |
+| --- | ---: | ---: |
+| A1 | 0.00870 | 0.01180 |
+| B32 | 0.00776 | 0.01196 |
+| B64 | 0.00735 | 0.01184 |
+| A2 | 0.00862 | 0.01184 |
+| Stability | 0.01083 | 0.01200 |
+
+GPU compute time covers dispatch and its output transitions. Render and readback follow. These timings characterize a deliberately contended, small workload. The results support keeping all sizes available and retaining the 1-thread validation default until larger scenes are tested. [Raw v0.2.0 records](raw/v0.2.0/).

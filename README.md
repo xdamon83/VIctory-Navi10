@@ -4,6 +4,8 @@ VIctory-Navi10 is an independent, experimental Direct3D 12 graphics laboratory f
 
 Full Xbox emulation is outside the project's scope. GTA VI has not been tested. The measurements below describe this laboratory.
 
+Version 0.2 adds a synthetic triangle meshlet path with perspective clipping, shared vertices, interpolated normals and flat materials. It runs as an independent fixture alongside the three city rendering paths. [Triangle fixtures](docs/triangle-meshlets.md) · [Data and synchronization contract](docs/data-sync-contract.md).
+
 ![Procedural city rendered on a Radeon RX 5700 XT using compute-generated indexed geometry](docs/images/city-10000.png)
 
 *Compute-generated geometry, 10,000 candidate objects, Radeon RX 5700 XT, 960 × 540. [See the 1,000-object capture](docs/images/city-1000.png).*
@@ -30,6 +32,7 @@ From the repository root:
 $exe = .\build.ps1
 & $exe --probe --out .\runs
 .\tests\verify.ps1 -Executable $exe
+& $exe --test-meshlets --out .\runs\triangles
 & $exe --view --objects 10000
 ```
 
@@ -67,7 +70,7 @@ All 24 image comparisons across the four object counts matched the direct path e
 
 ## Current limits
 
-The expansion shader targets the lab's fixed quad-based meshlets, orthographic camera, and opaque raster passes. General shader translation, amplification shader emulation, and integration into VIctory are research goals. The benchmark uses a single frame in flight. The capability probe reports wave-size support and queue availability. Wave-size performance and concurrent compute overlap remain unmeasured.
+The city expansion shader targets fixed quad-based meshlets and an orthographic camera. The triangle fixtures support variable-size indexed geometry and perspective, with one opaque draw and one frame in flight. General shader translation, amplification shader emulation, and integration into VIctory are research goals. The capability probe reports wave-size support and queue availability. The group-size study varies threads per group. It leaves hardware wave selection to the driver. [Protocol](benchmarks/README.md).
 
 ## Contribute
 

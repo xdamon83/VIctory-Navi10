@@ -1,0 +1,7 @@
+# VIctory integration notes
+
+The relevant upstream reference is PR #961 at head `31568ced3e44bb31aac5755e18c7d6f165204e30`. In `crates/victory-shader/src/emit/`, `translate_mesh_as_compute` provides compute and vertex forms and describes the emitted layout. `mesh_vs.rs` reads the outputs. In `crates/victory-gpu/src/`, `draw.rs` handles the draw path and `mesh_indirect.rs` builds indirect dispatch and draw records. Its published results cover upstream fixtures. Navi10's results cover its own Direct3D fixture. [PR and source diff](https://github.com/Marvisak/VIctory/pull/961/files).
+
+The common interface is an output vertex stream, index stream, primitive attribute stream and indirect draw record. Navi10 compacts accepted triangles into one index stream and preserves shared input vertices. Its pixel shader reads one flat 32-bit value per hardware primitive. The upstream approach allocates a slice per group and can generate a vertex reader for arbitrary shader output semantics. An adapter would need to carry per-group output counts, a layout and explicit draw ordering, then choose whether to preserve each group's slice or compact it.
+
+Navi10's capacity checks, sentinel tests and fence-before-reuse rule are candidates for independent integration work. Its fixture uses one queue and one opaque draw. General translated shaders may require ordering between compute work and earlier graphics writes. The external GPL code and the separately maintained Hybrid patch stay outside this MIT repository. No upstream change was made.

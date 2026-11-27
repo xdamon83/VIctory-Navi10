@@ -15,6 +15,7 @@ internal sealed class Options
     internal int Objects = 10000, Width = 960, Height = 540, Frames = 120, Warmup = 20;
     internal bool Warp, Test, Probe, View, TestTriangles;
     internal bool StabilityTriangles;
+    internal int TriangleGroupSize = 1;
     internal string Out;
     internal RenderPath[] Paths = { RenderPath.Direct, RenderPath.Indirect, RenderPath.Expanded };
 
@@ -29,6 +30,11 @@ internal sealed class Options
                 case "--test": options.Test = true; break;
                 case "--test-meshlets": options.TestTriangles = true; break;
                 case "--meshlet-stability": options.TestTriangles = options.StabilityTriangles = true; break;
+                case "--meshlet-group-size":
+                    options.TriangleGroupSize = Number(args[i], args, ref i, 1, 64);
+                    if (options.TriangleGroupSize != 1 && options.TriangleGroupSize != 32 && options.TriangleGroupSize != 64)
+                        throw new ArgumentException("--meshlet-group-size expects 1, 32 or 64.");
+                    break;
                 case "--probe": options.Probe = true; break;
                 case "--view": options.View = true; break;
                 case "--objects": options.Objects = Number(args[i], args, ref i, 1, 100000); break;
@@ -78,6 +84,7 @@ internal static class Program
         {
             Console.WriteLine("Navi10 [--probe | --test | --test-meshlets | --meshlet-stability | --view] [--warp] [--objects N] [--width N] [--height N]");
             Console.WriteLine("       [--frames N] [--warmup N] [--path direct|indirect|expanded] [--out DIRECTORY]");
+            Console.WriteLine("       [--meshlet-group-size 1|32|64]");
             return 0;
         }
         try
@@ -88,7 +95,8 @@ internal static class Program
             string shader = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
                 options.TestTriangles ? "TriangleMeshlets.hlsl" : "City.hlsl");
             using (var renderer = new Renderer(options.Width, options.Height,
-                options.TestTriangles ? 64 : options.Objects, options.Warp, shader, options.Probe, options.TestTriangles))
+                options.TestTriangles ? 64 : options.Objects, options.Warp, shader, options.Probe,
+                options.TestTriangles, options.TriangleGroupSize))
             {
                 if (options.Probe)
                 {

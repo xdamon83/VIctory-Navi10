@@ -71,8 +71,7 @@ bool ReserveTriangle(out uint start)
     return false;
 }
 
-[numthreads(1, 1, 1)]
-void Expand(uint id : SV_DispatchThreadID)
+void ExpandMeshlet(uint id)
 {
     if (VertexCount <= VertexCapacity && id < VertexCount)
     {
@@ -124,6 +123,15 @@ void Expand(uint id : SV_DispatchThreadID)
         Arguments.InterlockedAdd(36, 1); // complete triangle records written
     }
 }
+
+[numthreads(1, 1, 1)]
+void Expand(uint id : SV_DispatchThreadID) { ExpandMeshlet(id); }
+
+[numthreads(32, 1, 1)]
+void Expand32(uint id : SV_DispatchThreadID) { ExpandMeshlet(id); }
+
+[numthreads(64, 1, 1)]
+void Expand64(uint id : SV_DispatchThreadID) { ExpandMeshlet(id); }
 
 struct Varyings
 {

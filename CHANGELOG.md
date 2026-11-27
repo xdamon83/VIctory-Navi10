@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.0
+
+- Added synthetic variable-size triangle meshlets with indexed indirect draws, interpolated color and normals, and flat per-triangle material IDs.
+- Added a world-view-projection transform and conservative homogeneous culling. The rasterizer handles partial clipping.
+- Added independent output capacity checks, atomic reservations, readback counters and sentinels.
+- Added CPU reference comparisons, a fenced stability test and GPU timestamp studies for three compute group sizes.
+
 ## v0.1.0-alpha
 
 - Added an x64 Windows Direct3D 12 lab with a procedural city and a movable camera.

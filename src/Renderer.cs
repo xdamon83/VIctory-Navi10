@@ -45,7 +45,7 @@ internal sealed unsafe partial class Renderer : IDisposable
     internal readonly HardwareReport Hardware;
 
     internal Renderer(int width, int height, int objects, bool warp, string shaderFile, bool probeOnly = false,
-        bool triangleTest = false)
+        bool triangleTest = false, int triangleGroupSize = 1)
     {
         this.width = width;
         this.height = height;
@@ -53,6 +53,7 @@ internal sealed unsafe partial class Renderer : IDisposable
         grid = (int)Math.Ceiling(Math.Sqrt((objects + 7) / 8));
         rowPitch = (width * 4 + 255) & ~255;
         this.triangleTest = triangleTest;
+        TriangleGroupSize = triangleGroupSize;
         try
         {
             IntPtr adapter = OpenAdapter(warp);
@@ -206,7 +207,8 @@ internal sealed unsafe partial class Renderer : IDisposable
             var cull = new D3D.ComputePipeline { Root = root, CS = Compile(source, "Cull", "cs_5_1") };
             cullPipeline = Create(D3D.Device.CreateComputePipeline, &cull, D3D.PipelineId, "CreateComputePipelineState");
         }
-        var expand = new D3D.ComputePipeline { Root = root, CS = Compile(source, "Expand", "cs_5_1") };
+        string expansionEntry = triangleTest && TriangleGroupSize != 1 ? "Expand" + TriangleGroupSize : "Expand";
+        var expand = new D3D.ComputePipeline { Root = root, CS = Compile(source, expansionEntry, "cs_5_1") };
         expandPipeline = Create(D3D.Device.CreateComputePipeline, &expand, D3D.PipelineId, "Create expansion pipeline");
         signature = MakeSignature(0, 16);
         indexedSignature = MakeSignature(1, 20);

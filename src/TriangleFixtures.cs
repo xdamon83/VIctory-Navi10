@@ -77,6 +77,10 @@ internal static class TriangleFixtures
         public List<object> Cases { get; set; }
         public bool MaterialChangesImage { get; set; }
         public bool NormalChangesImage { get; set; }
+        public int ThreadGroupSize { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public int Warmup { get; set; }
     }
 
     internal static Report Run(Renderer renderer)
@@ -103,7 +107,7 @@ internal static class TriangleFixtures
         var empty = new MeshletInput(10, 0, 5, 0);
         var invalid = new MeshletInput(7, 3, 4, 1);
 
-        var report = new Report { Passed = true, Hardware = renderer.Hardware, Cases = new List<object>() };
+        var report = NewReport(renderer, 0);
         Verify(report, renderer, "empty-input", new MeshletInput[0],
             new VertexInput[0], new PrimitiveInput[0], 0, 0, 0, 0);
         Verify(report, renderer, "single", new[] { single }, input, primitives, 10, 3, 0, 0, 2, 0, 1, 1);
@@ -146,7 +150,7 @@ internal static class TriangleFixtures
 
     internal static Report RunStability(Renderer renderer, int frames, int warmup)
     {
-        var report = new Report { Passed = true, Hardware = renderer.Hardware, Cases = new List<object>() };
+        var report = NewReport(renderer, warmup);
         var vertices = new[]
         {
             new VertexInput(-0.7f, -0.6f, 1, 0, 0), new VertexInput(0.7f, -0.6f, 0, 1, 0),
@@ -161,6 +165,12 @@ internal static class TriangleFixtures
             if (!report.Passed) break;
         }
         return report;
+    }
+
+    private static Report NewReport(Renderer renderer, int warmup)
+    {
+        return new Report { Passed = true, Hardware = renderer.Hardware, Cases = new List<object>(),
+            ThreadGroupSize = renderer.TriangleGroupSize, Width = renderer.Width, Height = renderer.Height, Warmup = warmup };
     }
 
     private static void VerifyPerspective(Report report, Renderer renderer)
